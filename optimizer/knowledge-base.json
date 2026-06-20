@@ -1,0 +1,1534 @@
+{
+  "generated_at": "2026-06-19",
+  "provenance": "Fetched from official Anthropic / Claude Code docs by the cc-cost-research workflow (10 Sonnet agents). Not from model memory.",
+  "pricing": {
+    "sources": [
+      "https://platform.claude.com/docs/en/about-claude/models/overview",
+      "https://platform.claude.com/docs/en/about-claude/pricing"
+    ],
+    "models": [
+      {
+        "model": "claude-fable-5",
+        "input_per_mtok": 10,
+        "output_per_mtok": 50,
+        "cache_write_5m_per_mtok": 12.5,
+        "cache_write_1h_per_mtok": 20,
+        "cache_read_per_mtok": 1,
+        "notes": "Anthropic's most capable widely released model as of June 2026. Generally available on Claude API, Bedrock, Vertex AI, Microsoft Foundry."
+      },
+      {
+        "model": "claude-mythos-5",
+        "input_per_mtok": 10,
+        "output_per_mtok": 50,
+        "cache_write_5m_per_mtok": 12.5,
+        "cache_write_1h_per_mtok": 20,
+        "cache_read_per_mtok": 1,
+        "notes": "Limited availability via Project Glasswing (invitation-only). Same pricing as Fable 5."
+      },
+      {
+        "model": "claude-opus-4-8",
+        "input_per_mtok": 5,
+        "output_per_mtok": 25,
+        "cache_write_5m_per_mtok": 6.25,
+        "cache_write_1h_per_mtok": 10,
+        "cache_read_per_mtok": 0.5,
+        "notes": "Current flagship Opus model. 1M token context window. Fast mode available at $10/$50 MTok input/output."
+      },
+      {
+        "model": "claude-sonnet-4-6",
+        "input_per_mtok": 3,
+        "output_per_mtok": 15,
+        "cache_write_5m_per_mtok": 3.75,
+        "cache_write_1h_per_mtok": 6,
+        "cache_read_per_mtok": 0.3,
+        "notes": "Best combination of speed and intelligence. 1M token context window. Supports extended thinking and adaptive thinking."
+      },
+      {
+        "model": "claude-haiku-4-5",
+        "input_per_mtok": 1,
+        "output_per_mtok": 5,
+        "cache_write_5m_per_mtok": 1.25,
+        "cache_write_1h_per_mtok": 2,
+        "cache_read_per_mtok": 0.1,
+        "notes": "Fastest model with near-frontier intelligence. 200k token context window. Supports extended thinking."
+      }
+    ],
+    "ratios": "Input cost ratios (per MTok): Fable 5 / Mythos 5 = $10 (2x Opus 4.8, 3.33x Sonnet 4.6, 10x Haiku 4.5). Opus 4.8 = $5 (1.67x Sonnet 4.6, 5x Haiku 4.5). Sonnet 4.6 = $3 (3x Haiku 4.5). Haiku 4.5 = $1 (baseline). Output cost ratios follow the same pattern: Fable 5/Mythos 5 at $50 is 2x Opus ($25), 3.33x Sonnet ($15), 10x Haiku ($5). Cache read ratios (0.1x base input price for all models): Fable/Mythos $1, Opus 4.8 $0.50, Sonnet 4.6 $0.30, Haiku 4.5 $0.10 — so a cached Haiku call costs 1/100th of a non-cached Fable call. This 10x spread between tiers on input (and matched on output, cache write, cache read) means Haiku with prompt caching ($0.10/MTok reads) is 100x cheaper per cached token than Fable 5 at base input rates ($10/MTok)."
+  },
+  "summary": "The biggest quota-waste levers in Claude Code are: (1) running the wrong model tier — Opus/Fable at 5-10x Haiku input cost on routine work, and subagents inheriting an expensive parent model (agent teams burn ~7x tokens) — fixed by model/effortLevel/CLAUDE_CODE_SUBAGENT_MODEL pins; (2) cache misses, where extended thinking (billed as output, tens of thousands of tokens/turn), mid-session model/effort switches, and MCP-server churn force full-context reprocessing at 1x instead of 0.1x cache-read rates; (3) per-turn context bloat from oversized CLAUDE.md, undeferred MCP tool schemas (~55K tokens for a 5-server setup), and verbose tool/log output dumped into the main thread instead of filtered by hooks or isolated in subagents; and (4) over-large context windows (1M variants) and 1h-cache writes (2x premium) used when the session never amortizes them. Most savings come from a handful of per-project settings.json/env/MCP-config changes plus deferring MCP tools, capping thinking, and offloading verbose work to cheap Haiku subagents.",
+  "actionable_knobs": [
+    {
+      "name": "model (default model per project)",
+      "config_location": ".claude/settings.json (project) or ~/.claude/settings.json (user) — key \"model\", e.g. {\"model\": \"sonnet\"}. Also opusplan for Opus-plan/Sonnet-exec hybrid; /model <alias> persists to ~/.claude/settings.json on Enter; ANTHROPIC_MODEL=sonnet env for one session.",
+      "saves": "Avoids defaulting to Opus 4.8 (5x Haiku, 1.67x Sonnet input) on routine coding; opusplan runs Sonnet for the token-heavy execution phase while keeping Opus only for planning.",
+      "evidence": "\"Sonnet handles most coding tasks well and costs less than Opus. Reserve Opus for complex architectural decisions.\" / \"opusplan — uses opus during plan mode, then switches to sonnet for execution.\" — code.claude.com/docs/en/costs, /model-config"
+    },
+    {
+      "name": "effortLevel (adaptive reasoning depth)",
+      "config_location": ".claude/settings.json — {\"effortLevel\": \"medium\"} (low/medium/high/xhigh); env CLAUDE_CODE_EFFORT_LEVEL=low (highest precedence); /effort command. Subagent frontmatter: effort: low.",
+      "saves": "Thinking tokens bill as output; default high budget can be tens of thousands of tokens/request. low/medium cut thinking output on straightforward tasks.",
+      "evidence": "\"medium: Reduces token usage for cost-sensitive work\" / \"Thinking tokens are billed as output tokens, and the default budget can be tens of thousands of tokens per request.\" — code.claude.com/docs/en/model-config, /costs"
+    },
+    {
+      "name": "alwaysThinkingEnabled",
+      "config_location": "~/.claude/settings.json — {\"alwaysThinkingEnabled\": false}; or /config toggle thinking mode.",
+      "saves": "Disables extended thinking by default, eliminating tens-of-thousands-of-token thinking output (billed as output) on sessions that don't need deep reasoning.",
+      "evidence": "\"alwaysThinkingEnabled: Extended thinking default. Disabled = lower cost.\" — code.claude.com/docs/en/settings"
+    },
+    {
+      "name": "MAX_THINKING_TOKENS (fixed-budget models)",
+      "config_location": "env block in .claude/settings.json: {\"env\": {\"MAX_THINKING_TOKENS\": \"8000\"}}. Set 0 to disable thinking (needs CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING=1 on Opus 4.6/Sonnet 4.6; ignored by adaptive-reasoning models and Fable 5).",
+      "saves": "Caps runaway thinking-token spend on fixed-budget models.",
+      "evidence": "\"lowering the budget with MAX_THINKING_TOKENS=8000. Adaptive-reasoning models ignore nonzero budgets, so use effort levels there instead.\" — code.claude.com/docs/en/costs"
+    },
+    {
+      "name": "CLAUDE_CODE_SUBAGENT_MODEL",
+      "config_location": "env block in .claude/settings.json: {\"env\": {\"CLAUDE_CODE_SUBAGENT_MODEL\": \"haiku\"}}; set \"inherit\" to restore normal resolution.",
+      "saves": "Forces all subagents/agent-team members onto a cheap model regardless of frontmatter; agent teams use ~7x tokens vs standard sessions, each with its own context window.",
+      "evidence": "\"The model to use for all subagents and agent teams. Overrides the per-invocation model parameter and the subagent definition's model frontmatter.\" — code.claude.com/docs/en/model-config"
+    },
+    {
+      "name": "subagent model frontmatter",
+      "config_location": ".claude/agents/<name>.md or ~/.claude/agents/<name>.md — YAML key model: haiku (defaults to inherit).",
+      "saves": "Routes read-only scanning/log-parsing subagents to Haiku (~10-20x cheaper/token) instead of inheriting an Opus/Sonnet main session.",
+      "evidence": "\"For simple subagent tasks, specify model: haiku in your subagent configuration.\" — code.claude.com/docs/en/costs, /sub-agents"
+    },
+    {
+      "name": "subagent effort / maxTurns frontmatter",
+      "config_location": ".claude/agents/<name>.md — effort: low and maxTurns: <N>.",
+      "saves": "effort: low cuts thinking output for mechanical subagent work; maxTurns bounds worst-case token accumulation from runaway subagents.",
+      "evidence": "\"effort — Effort level when this subagent is active. Overrides the session effort level.\" / \"maxTurns — Maximum number of agentic turns before the subagent stops.\" — code.claude.com/docs/en/sub-agents"
+    },
+    {
+      "name": "fallbackModel",
+      "config_location": ".claude/settings.json — {\"fallbackModel\": [\"claude-sonnet-4-6\", \"claude-haiku-4-5\"]}; or --fallback-model sonnet,haiku.",
+      "saves": "Routes overloaded-primary turns to a cheaper fallback instead of failing and forcing an expensive full-context retry.",
+      "evidence": "\"When the primary model is overloaded... Claude Code can switch to a fallback model instead of failing the request.\" — code.claude.com/docs/en/model-config"
+    },
+    {
+      "name": "availableModels + enforceAvailableModels (managed)",
+      "config_location": "Managed settings: /Library/Application Support/ClaudeCode/managed-settings.json (macOS) or /etc/claude-code/managed-settings.json (Linux) — {\"availableModels\": [\"sonnet\",\"haiku\"], \"enforceAvailableModels\": true} (v2.1.175+).",
+      "saves": "Hard-blocks Opus/Fable selection across users, subagents, ANTHROPIC_MODEL, and the Default picker option fleet-wide.",
+      "evidence": "\"Enterprise administrators can use availableModels in managed or policy settings to restrict which models users can select.\" — code.claude.com/docs/en/model-config"
+    },
+    {
+      "name": "ANTHROPIC_DEFAULT_HAIKU_MODEL / ANTHROPIC_DEFAULT_SONNET_MODEL (pin alias versions)",
+      "config_location": "env block in .claude/settings.json: {\"env\": {\"ANTHROPIC_DEFAULT_HAIKU_MODEL\": \"claude-haiku-4-5\", \"ANTHROPIC_DEFAULT_SONNET_MODEL\": \"claude-sonnet-4-6\"}}.",
+      "saves": "Pins haiku/sonnet aliases (and opusplan execution, subagent haiku resolution) to known cheap versions, preventing silent auto-upgrade to costlier releases.",
+      "evidence": "\"To pin to a specific version... set the corresponding environment variable like ANTHROPIC_DEFAULT_OPUS_MODEL.\" — code.claude.com/docs/en/model-config"
+    },
+    {
+      "name": "autoCompactEnabled",
+      "config_location": ".claude/settings.json or ~/.claude/settings.json — {\"autoCompactEnabled\": true} (DISABLE_AUTO_COMPACT=1 to disable).",
+      "saves": "Summarizes history near the context limit, keeping per-turn input token counts lower across long sessions.",
+      "evidence": "\"autoCompactEnabled: Auto-compact on context limit. Enabled = prevents resets.\" — code.claude.com/docs/en/settings"
+    },
+    {
+      "name": "CLAUDE_CODE_AUTO_COMPACT_WINDOW",
+      "config_location": "env block in .claude/settings.json: {\"env\": {\"CLAUDE_CODE_AUTO_COMPACT_WINDOW\": \"50000\"}}.",
+      "saves": "Sets a smaller effective window than the model's full window so compaction triggers earlier, keeping average context small.",
+      "evidence": "\"Context capacity in tokens for auto-compaction calculations... Use lower values to trigger compaction earlier.\" — code.claude.com/docs/en/env-vars"
+    },
+    {
+      "name": "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE",
+      "config_location": "env block in .claude/settings.json: {\"env\": {\"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE\": \"70\"}} (1-100); applies to subagents too.",
+      "saves": "Triggers compaction at a lower fill percentage, proportionally reducing average per-turn input spend.",
+      "evidence": "\"Percentage (1-100) of auto-compaction window at which compaction triggers. Lower values compact earlier.\" — code.claude.com/docs/en/env-vars"
+    },
+    {
+      "name": "Compaction instructions in CLAUDE.md",
+      "config_location": "CLAUDE.md (project root or ~/.claude/CLAUDE.md) — a \"# Compact instructions\" section, e.g. focus on test output and code changes.",
+      "saves": "Makes every auto-compaction keep high-value tokens and discard low-value history, yielding a smaller post-compact context.",
+      "evidence": "\"You can also customize compaction behavior in your CLAUDE.md: # Compact instructions...\" — code.claude.com/docs/en/costs"
+    },
+    {
+      "name": "ENABLE_PROMPT_CACHING_1H",
+      "config_location": "env block in .claude/settings.json: {\"env\": {\"ENABLE_PROMPT_CACHING_1H\": \"1\"}} (API key/Bedrock/Vertex/Foundry; subscription plans get 1h automatically).",
+      "saves": "Keeps the cached prefix warm through 5-60 min pauses so resumes hit cache reads (0.1x) instead of full reprocessing (1x). Worth it only if the prefix is read more than ~2.2x/hour given the 2x write premium.",
+      "evidence": "\"the TTL stays at the cheaper five minutes by default. To opt into the one-hour TTL, set ENABLE_PROMPT_CACHING_1H=1.\" — code.claude.com/docs/en/prompt-caching"
+    },
+    {
+      "name": "FORCE_PROMPT_CACHING_5M",
+      "config_location": "env block in .claude/settings.json or shell: FORCE_PROMPT_CACHING_5M=1.",
+      "saves": "Forces the cheaper 5-minute TTL on plans defaulting to 1h, avoiding the 2x cache-write premium for short sessions that never exercise the 1h window.",
+      "evidence": "\"Set FORCE_PROMPT_CACHING_5M=1 to force the five-minute TTL regardless of authentication.\" — code.claude.com/docs/en/prompt-caching"
+    },
+    {
+      "name": "CLAUDE_CODE_ATTRIBUTION_HEADER=0",
+      "config_location": "env block in .claude/settings.json: {\"env\": {\"CLAUDE_CODE_ATTRIBUTION_HEADER\": \"0\"}}.",
+      "saves": "Stabilizes the system-prompt prefix across sessions behind an LLM gateway, raising cache-hit rates so input is reused at ~0.1x instead of reprocessed at 1x.",
+      "evidence": "\"Set to 0 to omit attribution block from system prompt, improving prompt-cache hit rates with LLM gateways.\" — code.claude.com/docs/en/env-vars"
+    },
+    {
+      "name": "DISABLE_AUTOUPDATER (control when upgrades apply)",
+      "config_location": "env block in .claude/settings.json or shell: DISABLE_AUTOUPDATER=1; start a fresh session after upgrading rather than resuming a long one.",
+      "saves": "Prevents a background Claude Code upgrade from changing the system prompt and forcing a full uncached reprocess of long resumed histories.",
+      "evidence": "\"Resuming a session after an upgrade reprocesses the entire conversation history with no cache hits, since the history now sits behind a different system prompt.\" — code.claude.com/docs/en/prompt-caching"
+    },
+    {
+      "name": "CLAUDE_CODE_DISABLE_1M_CONTEXT=1",
+      "config_location": "env block in .claude/settings.json: {\"env\": {\"CLAUDE_CODE_DISABLE_1M_CONTEXT\": \"1\"}}.",
+      "saves": "Removes 1M-context variants from the picker, preventing accidental usage-credit spend on extended context where it isn't included (Pro; Sonnet on subscription plans).",
+      "evidence": "\"Set to 1 to disable 1M context window support. This removes 1M model variants from the model picker.\" — code.claude.com/docs/en/env-vars"
+    },
+    {
+      "name": "ENABLE_TOOL_SEARCH / MCP deferred tool loading",
+      "config_location": "Default behavior (keep it). To tune: env block in .claude/settings.json {\"env\": {\"ENABLE_TOOL_SEARCH\": \"auto:5\"}} (auto = 10% window threshold; true forces deferral on Vertex/proxies; false disables). Avoid alwaysLoad: true in .mcp.json/~/.claude.json unless a tool is needed every turn.",
+      "saves": "Keeps MCP tool schemas (~55K tokens for a 5-server setup) out of the cached prefix until used, cutting per-turn input and avoiding cache invalidation on server connect/disconnect.",
+      "evidence": "\"Tool search keeps MCP context usage low by deferring tool definitions until Claude needs them.\" / ~55K tokens before conversation for a 5-server setup — code.claude.com/docs/en/mcp"
+    },
+    {
+      "name": "MAX_MCP_OUTPUT_TOKENS",
+      "config_location": "env block in .claude/settings.json: {\"env\": {\"MAX_MCP_OUTPUT_TOKENS\": \"10000\"}} (default 25000; warns at 10000).",
+      "saves": "Caps how many tokens any single MCP tool response can occupy; overflow is persisted to disk and replaced with a file reference.",
+      "evidence": "\"Default limit: 25,000 tokens... To increase the limit: export MAX_MCP_OUTPUT_TOKENS=50000\" (lowering applies the same cap) — code.claude.com/docs/en/mcp"
+    },
+    {
+      "name": "disableClaudeAiConnectors / deniedMcpServers / claude mcp remove",
+      "config_location": ".claude/settings.json {\"disableClaudeAiConnectors\": true} (or env ENABLE_CLAUDEAI_MCP_SERVERS=false); managed/settings {\"deniedMcpServers\": [{\"serverName\": \"...\"}]}; CLI claude mcp remove <name> / remove from .mcp.json or ~/.claude.json.",
+      "saves": "Removes unused connectors/servers whose tool names + 2KB server instructions load at session start on every turn.",
+      "evidence": "\"To disable claude.ai MCP servers... set disableClaudeAiConnectors to true.\" / \"Disable unused servers: Run /mcp...\" — code.claude.com/docs/en/mcp, /costs"
+    },
+    {
+      "name": "Subagent mcpServers / tools / disallowedTools frontmatter",
+      "config_location": ".claude/agents/<name>.md — define an MCP server inline under mcpServers (keeps schemas out of main context), and allowlist with tools: or denylist with disallowedTools:.",
+      "saves": "Confines MCP tool schemas (hundreds of tokens each) to a subagent's run so the main conversation never carries them; tool restriction trims per-turn tool-definition overhead.",
+      "evidence": "\"To keep an MCP server out of the main conversation entirely... define it inline here rather than in .mcp.json.\" — code.claude.com/docs/en/sub-agents"
+    },
+    {
+      "name": "claudeMdExcludes",
+      "config_location": ".claude/settings.local.json (or settings.json) — {\"claudeMdExcludes\": [\"**/vendor/**/CLAUDE.md\", \"**/node_modules/**/CLAUDE.md\"]}.",
+      "saves": "Stops irrelevant ancestor/vendor CLAUDE.md files from concatenating into context at launch, cutting input tokens every turn.",
+      "evidence": "\"claudeMdExcludes: Glob patterns for CLAUDE.md files to exclude from loading.\" — code.claude.com/docs/en/settings, /memory"
+    },
+    {
+      "name": "Keep CLAUDE.md under 200 lines; move workflows to skills/path-scoped rules",
+      "config_location": "CLAUDE.md (project/user); move workflow instructions to .claude/skills/<name>/SKILL.md (load on /invoke) or .claude/rules/<topic>.md with YAML paths: globs (load only when matching files are touched). Use <!-- --> for maintainer notes (stripped).",
+      "saves": "CLAUDE.md loads every turn; skills/path-scoped rules load only on demand, shrinking base per-turn context.",
+      "evidence": "\"Aim to keep CLAUDE.md under 200 lines... Skills load on-demand only when invoked.\" / \"conditional rules only apply when Claude is working with files matching the specified patterns.\" — code.claude.com/docs/en/costs, /memory"
+    },
+    {
+      "name": "outputStyle (avoid Explanatory/Learning)",
+      "config_location": ".claude/settings.local.json — {\"outputStyle\": \"Default\"} (set at session start, not mid-session); or /config > Output style.",
+      "saves": "Default style is most token-efficient; Explanatory/Learning add Insights/TODO sections that inflate output tokens every response.",
+      "evidence": "\"The built-in Explanatory and Learning styles produce longer responses than Default by design, which increases output tokens.\" — code.claude.com/docs/en/output-styles"
+    },
+    {
+      "name": "PreToolUse / PostToolUse hooks (output filtering, blocking, auto-format)",
+      "config_location": ".claude/settings.json hooks.PreToolUse (matcher \"Bash\", optional if: \"Bash(git *)\" filter) to grep/trim verbose output and block destructive/protected-file ops with exit 2 or permissionDecision \"deny\"; hooks.PostToolUse (matcher \"Edit|Write\") to auto-run a formatter.",
+      "saves": "Filters 10k-line logs/test output down to hundreds of tokens before they enter context; deterministic formatting and blocked-op feedback remove correction/retry round-trips.",
+      "evidence": "\"a hook can grep for ERROR and return only matching lines, reducing context from tens of thousands of tokens to hundreds.\" — code.claude.com/docs/en/costs, /hooks-guide"
+    },
+    {
+      "name": "SessionStart (compact) hook to re-inject context",
+      "config_location": ".claude/settings.json hooks.SessionStart with matcher \"compact\"; command writes critical project facts to stdout.",
+      "saves": "Re-supplies conventions after compaction so Claude doesn't make wrong assumptions that require wasted correction turns.",
+      "evidence": "\"Use a SessionStart hook with a compact matcher to re-inject critical context after every compaction.\" — code.claude.com/docs/en/hooks-guide"
+    },
+    {
+      "name": "Stop hook (verify completion) with 8-block guard",
+      "config_location": ".claude/settings.json hooks.Stop type \"prompt\" (model defaults to Haiku); script checks stop_hook_active and exits 0 if true; cap raised via CLAUDE_CODE_STOP_HOOK_BLOCK_CAP.",
+      "saves": "Prevents premature stops that force the user to re-prompt (a new turn + context re-establishment), while the guard prevents unbounded re-trigger loops.",
+      "evidence": "\"If the model returns 'ok: false', Claude keeps working... Claude Code overrides a Stop hook after it blocks 8 times in a row.\" — code.claude.com/docs/en/hooks-guide"
+    },
+    {
+      "name": "disableAllHooks / CLAUDE_CODE_DISABLE_BACKGROUND_TASKS",
+      "config_location": ".claude/settings.json {\"disableAllHooks\": true}; env block {\"env\": {\"CLAUDE_CODE_DISABLE_BACKGROUND_TASKS\": \"1\"}}.",
+      "saves": "Eliminates background API token consumption from hooks and auto-spawned background subagents (each with its own context window) when not needed.",
+      "evidence": "\"Set to 1 to disable all background task functionality...\" / disableAllHooks key — code.claude.com/docs/en/env-vars, /settings"
+    },
+    {
+      "name": "Workspace spend & rate limits",
+      "config_location": "Claude Console (platform.claude.com) workspace Limits page for spend/rate caps; /usage-credits inside Claude Code for Pro/Max monthly spend cap.",
+      "saves": "Hard cap on total spend and per-user TPM/RPM, preventing runaway cost from automation or long agent sessions.",
+      "evidence": "\"you can set workspace spend limits on the total Claude Code workspace spend.\" / \"set a monthly spend limit on usage credits with the /usage-credits command.\" — code.claude.com/docs/en/costs"
+    }
+  ],
+  "excluded_advisory": [
+    "Default model tier awareness (subscription plan determines default) — informational, no config to apply",
+    "/usage command — visibility only, not a reducer",
+    "/clear between tasks — interactive runtime action, not per-project config",
+    "/compact with custom instructions — interactive runtime action (the persistable form, Compact instructions in CLAUDE.md, is kept)",
+    "MCP tool deferral as a fact / 'enable MCP tool search' duplicates — kept once as ENABLE_TOOL_SEARCH/deferred loading knob",
+    "/btw for side questions — interactive runtime action",
+    "/rewind partial/abandon-path — interactive runtime action, not config",
+    "Plan mode before implementation (Shift+Tab) — interactive runtime behavior",
+    "Prompt caching (automatic) — default-on, nothing to apply",
+    "Delegate verbose operations to subagents (behavioral) — kept only as the configurable subagent frontmatter/mcpServers knobs; the pure behavioral 'use a subagent' tip is advisory",
+    "Prefer CLI tools over MCP servers — behavioral preference, no config key",
+    "Code intelligence plugins — install/behavioral, not a per-project config optimization scanner can emit",
+    "Built-in Explore subagent (Haiku, read-only) — default-on behavior (its deny knob is niche)",
+    "Fork subagent prompt-cache sharing (/fork) — interactive runtime action",
+    "CLAUDE_AGENT_SDK_DISABLE_BUILTIN_AGENTS / suppress per-machine system prompt — Agent-SDK/headless only, not a per-project Claude Code session config",
+    "Nested subagent depth cap (max 5) — fixed platform guardrail, not configurable",
+    "Subagent memory / skills preload frontmatter — workflow-optimization tips, not waste-driven config a log scanner reliably flags",
+    "Minimum cacheable token threshold — informational; no Claude Code config knob",
+    "Explicit cache_control breakpoints / automatic top-level caching / pre-warm max_tokens=0 / place breakpoints on static prefix — raw Anthropic API request-body techniques, not Claude Code per-project config",
+    "Disable prompt caching per model — diagnostic only, not a cost saver",
+    "Keep MCP server instructions concise (2KB) — server-side authoring concern, not client config",
+    "anthropic/alwaysLoad and anthropic/maxResultSizeChars per-tool _meta — server-side MCP authoring, not client-side per-project config",
+    "Keep model/effort fixed for session; pick at session start; don't change output style mid-session — behavioral session discipline, not a config key (the underlying settings keys model/effortLevel/outputStyle are kept)",
+    "Status line context/cache display & /statusline — observability, not a reducer",
+    "Agent team size/spawn discipline & CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS — behavioral; cost control kept via CLAUDE_CODE_SUBAGENT_MODEL/maxTurns",
+    "Auto memory (autoMemoryEnabled) — default-on behavior, minor"
+  ],
+  "detection_signals": [
+    {
+      "signal": "Expensive model used for trivial/short work",
+      "how_to_measure": "Per assistant line, read message.model and message.usage. Flag turns where message.model starts with claude-opus or claude-fable/claude-mythos AND output_tokens is small (e.g. < 600) AND no large tool result preceded it. Compute share = (such turns' input+output cost at that model) / total session cost; flag if Opus/Fable turns with output_tokens<600 exceed ~40% of assistant turns or ~50% of spend.",
+      "maps_to_knob": "model (default model per project) / opusplan; effortLevel; availableModels+enforceAvailableModels",
+      "severity_hint": "high — Opus input is 5x Haiku / 1.67x Sonnet; Fable 10x Haiku. Routine work on Opus/Fable is the single largest avoidable multiplier."
+    },
+    {
+      "signal": "Low prompt-cache hit ratio",
+      "how_to_measure": "Sum cache_read_input_tokens and cache_creation_input_tokens across assistant lines. cache_hit_ratio = read / (read + creation). Also compute creation-heavy turns: count turns where cache_creation_input_tokens > cache_read_input_tokens after turn 1. Flag if session ratio < ~0.5 or if creation stays high turn-after-turn (indicates a prefix-invalidating action such as a model/effort switch — detectable as message.model or service_tier changing between consecutive assistant lines in the same sessionId).",
+      "maps_to_knob": "CLAUDE_CODE_ATTRIBUTION_HEADER=0; ENABLE_PROMPT_CACHING_1H (for pause-driven misses); DISABLE_AUTOUPDATER (version change mid-session, detectable via the version field changing); model/effortLevel kept fixed",
+      "severity_hint": "high — a cache miss reprocesses the full context at 1x instead of 0.1x; one miss on a long session can cost as much as the whole prior conversation."
+    },
+    {
+      "signal": "1h-cache write overuse without amortization",
+      "how_to_measure": "From cache_creation.ephemeral_1h_input_tokens vs ephemeral_5m_input_tokens: count 1h cache-write tokens, then check whether they are subsequently read. If sum(ephemeral_1h_input_tokens) is large but the number of cache_read turns within the following hour (by timestamp) is low (e.g. < ~2 reads per 1h write block), the 2x write premium is wasted.",
+      "maps_to_knob": "FORCE_PROMPT_CACHING_5M=1 (when sessions are short / few reads); conversely ENABLE_PROMPT_CACHING_1H only when reads/hour are high",
+      "severity_hint": "medium — 1h writes cost 2x base input vs 1.25x for 5m; net loss only when the prefix is read fewer than ~2.2 times before expiry."
+    },
+    {
+      "signal": "MCP tool-schema context bloat",
+      "how_to_measure": "Detect MCP usage via attributionMcpServer / attributionMcpTool fields and count distinct servers. Proxy for upfront schema cost: high first-turn input_tokens / cache_creation_input_tokens on the session's first assistant line that scales with number of distinct attributionMcpServer values. Flag if many MCP servers appear but only a small subset of attributionMcpTool values are ever actually invoked (configured-but-unused servers), or if first-turn cached prefix is unusually large.",
+      "maps_to_knob": "ENABLE_TOOL_SEARCH (keep deferred / auto:N); disableClaudeAiConnectors / deniedMcpServers / claude mcp remove; subagent mcpServers frontmatter; avoid alwaysLoad",
+      "severity_hint": "high — a 5-server setup can add ~55K tokens to every turn's prefix; deferral cuts this to near zero for unused schemas."
+    },
+    {
+      "signal": "Oversized per-turn context (input growing unbounded)",
+      "how_to_measure": "Track non-cached input_tokens + cache_read_input_tokens per assistant turn over the session. Flag if per-turn total context climbs monotonically past a threshold (e.g. > 120K) without any compaction event, or if baseline first-turn input (system prompt + CLAUDE.md) is high (e.g. > 15K before any user content) — indicating large CLAUDE.md / many undeferred tools.",
+      "maps_to_knob": "autoCompactEnabled; CLAUDE_CODE_AUTO_COMPACT_WINDOW; CLAUDE_AUTOCOMPACT_PCT_OVERRIDE; Compaction instructions in CLAUDE.md; claudeMdExcludes; keep CLAUDE.md <200 lines / move to skills/rules; outputStyle Default",
+      "severity_hint": "high — input tokens are re-sent every turn; an unbounded context multiplies cost across the whole session."
+    },
+    {
+      "signal": "Heavy verbose work done on main thread instead of a cheap subagent",
+      "how_to_measure": "Identify main-thread turns (isSidechain absent/false) with very large input_tokens driven by tool results (large toolUseResult on the preceding user line, e.g. test/log/file dumps) running on an expensive message.model. Compare against isSidechain=true turns to see if subagents are underused. Flag main-thread turns where a >10K-token tool result is processed on Opus/Sonnet with low resulting output_tokens.",
+      "maps_to_knob": "CLAUDE_CODE_SUBAGENT_MODEL=haiku; subagent model/effort/maxTurns/tools frontmatter; PreToolUse output-filtering hooks; MAX_MCP_OUTPUT_TOKENS",
+      "severity_hint": "high — verbose output processed on the main thread both inflates that turn and persists in context for all later turns at full input rate."
+    },
+    {
+      "signal": "Redundant repeated tool calls",
+      "how_to_measure": "Hash identical tool invocations (same tool name + same toolUseResult/input signature) within a sessionId; count exact repeats. Also detect Stop/retry loops via repeated near-identical assistant turns and stop_hook_active patterns. Flag sessions where >~15% of tool calls are exact duplicates or where the same file/command is re-read 3+ times.",
+      "maps_to_knob": "PreToolUse/PostToolUse hooks (auto-format, deny-with-reason feedback); Stop hook with completion check + 8-block guard; subagent memory to avoid re-exploration",
+      "severity_hint": "medium — each redundant call is an extra turn re-sending the full context; loops can accumulate unbounded tokens."
+    },
+    {
+      "signal": "Web search / fetch spend",
+      "how_to_measure": "Sum message.usage.server_tool_use.web_search_requests and web_fetch_requests across assistant lines per session. Flag sessions with high counts (e.g. > ~20 web_search_requests) or fetches returning very large bodies that spike the next turn's input_tokens.",
+      "maps_to_knob": "PreToolUse output-filtering hooks (trim fetched bodies); delegate fetching to a Haiku subagent (CLAUDE_CODE_SUBAGENT_MODEL / subagent model frontmatter) to keep large fetched content out of main context; MAX_MCP_OUTPUT_TOKENS for MCP-based fetch tools",
+      "severity_hint": "medium — web_search/web_fetch are billed server-tool requests and the returned content inflates subsequent main-thread input if not isolated or trimmed."
+    }
+  ],
+  "research_knobs_actionable": [
+    {
+      "name": "model (settings key)",
+      "mechanism": "Sets the default model for all sessions. Use cheaper/faster model aliases (haiku, sonnet) or specific IDs like claude-haiku-4-5 instead of opus or fable to reduce per-token costs directly. The haiku alias resolves to the fast, low-cost Haiku model and is specifically recommended for simple tasks.",
+      "config_location": ".claude/settings.json or ~/.claude/settings.json — key: \"model\", e.g. {\"model\": \"haiku\"}",
+      "saves": "Eliminates spending Opus/Sonnet tokens on routine or simple tasks; Haiku costs a fraction of Opus per token.",
+      "actionable": true,
+      "evidence": "\"Choose the right model: Sonnet handles most coding tasks well and costs less than Opus. Reserve Opus for complex architectural decisions or multi-step reasoning.\" — https://code.claude.com/docs/en/costs",
+      "area": "Claude Code settings.json / configuration file reference — every key, env vars, where settings live (user vs project vs local), permissions"
+    },
+    {
+      "name": "effortLevel (settings key)",
+      "mechanism": "Controls adaptive reasoning depth. Lower effort levels (low, medium) cause the model to think less per step, spending fewer output tokens on reasoning. Default is 'high' on most models. 'low' is for short, scoped, latency-sensitive tasks; 'medium' reduces token usage for cost-sensitive work.",
+      "config_location": ".claude/settings.json or ~/.claude/settings.json — key: \"effortLevel\", e.g. {\"effortLevel\": \"low\"}. Also settable via env var CLAUDE_CODE_EFFORT_LEVEL=low or CLI flag --effort low or /effort command.",
+      "saves": "Thinking tokens are billed as output tokens. 'The default budget can be tens of thousands of tokens per request depending on the model.' Lower effort = fewer thinking tokens per turn.",
+      "actionable": true,
+      "evidence": "\"medium: Reduces token usage for cost-sensitive work that can trade off some intelligence\" and \"low: Reserve for short, scoped, latency-sensitive tasks\" — https://code.claude.com/docs/en/model-config",
+      "area": "Claude Code settings.json / configuration file reference — every key, env vars, where settings live (user vs project vs local), permissions"
+    },
+    {
+      "name": "CLAUDE_CODE_EFFORT_LEVEL (env var)",
+      "mechanism": "Sets the effort level globally, taking highest precedence over /effort and effortLevel setting. Accepts low, medium, high, xhigh, max, or auto.",
+      "config_location": "env block in .claude/settings.json: {\"env\": {\"CLAUDE_CODE_EFFORT_LEVEL\": \"low\"}} or system environment variable CLAUDE_CODE_EFFORT_LEVEL=low",
+      "saves": "Enforces a low-cost effort ceiling across all sessions, preventing accidental high-effort spending.",
+      "actionable": true,
+      "evidence": "\"CLAUDE_CODE_EFFORT_LEVEL: Set effort level: low, medium, high, xhigh, max, or auto. Takes precedence over /effort and effortLevel setting\" — https://code.claude.com/docs/en/env-vars",
+      "area": "Claude Code settings.json / configuration file reference — every key, env vars, where settings live (user vs project vs local), permissions"
+    },
+    {
+      "name": "alwaysThinkingEnabled (settings key)",
+      "mechanism": "Controls whether extended thinking is on by default for every session. Setting to false disables extended thinking globally, preventing tens of thousands of thinking tokens from being generated on every request. Thinking tokens are billed as output tokens.",
+      "config_location": "~/.claude/settings.json — key: \"alwaysThinkingEnabled\", e.g. {\"alwaysThinkingEnabled\": false}. Also toggled via /config in interactive mode.",
+      "saves": "Eliminates thinking-token overhead for sessions where deep reasoning is not needed. 'The default budget can be tens of thousands of tokens per request depending on the model.'",
+      "actionable": true,
+      "evidence": "\"Disabling thinking... you can reduce costs by... disabling thinking in /config\" and \"alwaysThinkingEnabled: Extended thinking default. Disabled = lower cost\" — https://code.claude.com/docs/en/costs and https://code.claude.com/docs/en/settings",
+      "area": "Claude Code settings.json / configuration file reference — every key, env vars, where settings live (user vs project vs local), permissions"
+    },
+    {
+      "name": "MAX_THINKING_TOKENS (env var)",
+      "mechanism": "On models with a fixed thinking budget (Opus 4.6, Sonnet 4.6 when CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING=1), sets a hard upper bound on thinking tokens per request. Set to 0 to disable thinking entirely on these models (not effective on Fable 5). Set to a low value like 8000 to cap spend.",
+      "config_location": "env block in .claude/settings.json: {\"env\": {\"MAX_THINKING_TOKENS\": \"8000\"}} or system environment variable MAX_THINKING_TOKENS=8000",
+      "saves": "Caps runaway thinking token spend on fixed-budget models. 'For simpler tasks where deep reasoning isn't needed... lowering the budget with MAX_THINKING_TOKENS=8000'",
+      "actionable": true,
+      "evidence": "\"lowering the budget with MAX_THINKING_TOKENS=8000. Adaptive-reasoning models ignore nonzero budgets, so use effort levels there instead.\" — https://code.claude.com/docs/en/costs",
+      "area": "Claude Code settings.json / configuration file reference — every key, env vars, where settings live (user vs project vs local), permissions"
+    },
+    {
+      "name": "availableModels (settings key)",
+      "mechanism": "Restricts which models users can select in /model picker, --model flag, ANTHROPIC_MODEL env var, subagent frontmatter, and fallback chains. Entries outside the list are blocked or dropped. Prevents accidental use of expensive models (Opus, Fable) on tasks suited to Haiku/Sonnet.",
+      "config_location": "Managed settings only for strict enforcement: /Library/Application Support/ClaudeCode/managed-settings.json (macOS) or /etc/claude-code/managed-settings.json (Linux) — key: \"availableModels\", e.g. {\"availableModels\": [\"sonnet\", \"haiku\"]}",
+      "saves": "Hard-blocks use of expensive Opus/Fable models by users or subagents, enforcing a cheaper model ceiling across the team.",
+      "actionable": true,
+      "evidence": "\"Enterprise administrators can use availableModels in managed or policy settings to restrict which models users can select.\" — https://code.claude.com/docs/en/model-config",
+      "area": "Claude Code settings.json / configuration file reference — every key, env vars, where settings live (user vs project vs local), permissions"
+    },
+    {
+      "name": "enforceAvailableModels (settings key)",
+      "mechanism": "When set to true alongside a non-empty availableModels list in managed settings, extends the allowlist to the 'Default' model picker option so users cannot bypass availableModels by choosing Default (which would otherwise resolve to the tier's default model, often Opus).",
+      "config_location": "Managed settings: /Library/Application Support/ClaudeCode/managed-settings.json (macOS) — key: \"enforceAvailableModels\": true. Requires Claude Code v2.1.175+.",
+      "saves": "Closes the loophole where a user picks 'Default' in /model to get Opus even when availableModels restricts it.",
+      "actionable": true,
+      "evidence": "\"To extend the allowlist to the Default option, set enforceAvailableModels to true in managed or policy settings... When the tier default is not in the allowlist, Default resolves to the first allowed entry instead.\" — https://code.claude.com/docs/en/model-config",
+      "area": "Claude Code settings.json / configuration file reference — every key, env vars, where settings live (user vs project vs local), permissions"
+    },
+    {
+      "name": "fallbackModel (settings key)",
+      "mechanism": "Defines an ordered fallback chain (up to 3 models) when the primary model is overloaded or unavailable. Instead of failing and requiring a retry (which wastes a full context-window worth of tokens re-sent), Claude Code automatically falls back to a cheaper/faster model for that turn only.",
+      "config_location": ".claude/settings.json or ~/.claude/settings.json — key: \"fallbackModel\", e.g. {\"fallbackModel\": [\"claude-sonnet-4-6\", \"claude-haiku-4-5\"]}. Also set per-session with --fallback-model sonnet,haiku flag.",
+      "saves": "Avoids failed requests and expensive retries by routing overloaded-model turns to a cheaper fallback automatically.",
+      "actionable": true,
+      "evidence": "\"When the primary model is overloaded, unavailable, or returns another non-retryable server error, Claude Code can switch to a fallback model instead of failing the request.\" — https://code.claude.com/docs/en/model-config",
+      "area": "Claude Code settings.json / configuration file reference — every key, env vars, where settings live (user vs project vs local), permissions"
+    },
+    {
+      "name": "opusplan model alias",
+      "mechanism": "Uses Opus during plan mode (complex reasoning/architecture) and automatically switches to Sonnet for execution (code generation). Combines Opus reasoning quality where it matters with Sonnet's lower per-token cost for the bulk of implementation work.",
+      "config_location": ".claude/settings.json or ~/.claude/settings.json — key: \"model\": \"opusplan\" or /model opusplan in session.",
+      "saves": "Replaces a pure-Opus session with a hybrid that runs Sonnet during the longer execution phase, reducing costs for the majority of tokens generated.",
+      "actionable": true,
+      "evidence": "\"The opusplan model alias provides an automated hybrid approach: In plan mode - Uses opus for complex reasoning... In execution mode - Automatically switches to sonnet for code generation and implementation.\" — https://code.claude.com/docs/en/model-config",
+      "area": "Claude Code settings.json / configuration file reference — every key, env vars, where settings live (user vs project vs local), permissions"
+    },
+    {
+      "name": "autoCompactEnabled (settings key)",
+      "mechanism": "When enabled, Claude Code automatically summarizes conversation history when approaching the context limit instead of letting the context fill up and requiring a full reset. Compaction replaces accumulated turns with a dense summary, reducing context size and therefore per-turn input token costs going forward.",
+      "config_location": ".claude/settings.json or ~/.claude/settings.json — key: \"autoCompactEnabled\": true",
+      "saves": "Prevents the context window from bloating with stale turns, keeping per-message input token counts lower across long sessions.",
+      "actionable": true,
+      "evidence": "\"autoCompactEnabled: Auto-compact on context limit. Enabled = prevents resets\" and Claude Code \"automatically optimizes costs through... auto-compaction, which summarizes conversation history when approaching context limits.\" — https://code.claude.com/docs/en/settings and https://code.claude.com/docs/en/costs",
+      "area": "Claude Code settings.json / configuration file reference — every key, env vars, where settings live (user vs project vs local), permissions"
+    },
+    {
+      "name": "CLAUDE_CODE_AUTO_COMPACT_WINDOW (env var)",
+      "mechanism": "Sets the effective context capacity (in tokens) used for auto-compaction calculations. Setting a lower value than the model's actual window triggers compaction earlier, keeping context smaller and reducing per-turn input token costs before the window is fully saturated.",
+      "config_location": "env block in .claude/settings.json: {\"env\": {\"CLAUDE_CODE_AUTO_COMPACT_WINDOW\": \"50000\"}} or system environment variable",
+      "saves": "Forces earlier compaction, preventing context from growing to expensive full-window sizes between automatic compactions.",
+      "actionable": true,
+      "evidence": "\"CLAUDE_CODE_AUTO_COMPACT_WINDOW: Context capacity in tokens for auto-compaction calculations. Defaults to model's full window (200K or 1M). Use lower values to trigger compaction earlier.\" — https://code.claude.com/docs/en/env-vars",
+      "area": "Claude Code settings.json / configuration file reference — every key, env vars, where settings live (user vs project vs local), permissions"
+    },
+    {
+      "name": "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE (env var)",
+      "mechanism": "Sets the percentage (1-100) of the auto-compact window at which compaction triggers. Lower values cause compaction to happen earlier in the context fill cycle, keeping average context size smaller and reducing per-turn input costs.",
+      "config_location": "env block in .claude/settings.json: {\"env\": {\"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE\": \"70\"}} or system environment variable",
+      "saves": "Reduces average context size per turn by triggering compaction sooner, proportionally reducing input token spend.",
+      "actionable": true,
+      "evidence": "\"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE: Percentage (1-100) of auto-compaction window at which compaction triggers. Lower values compact earlier.\" — https://code.claude.com/docs/en/env-vars",
+      "area": "Claude Code settings.json / configuration file reference — every key, env vars, where settings live (user vs project vs local), permissions"
+    },
+    {
+      "name": "ENABLE_PROMPT_CACHING_1H (env var)",
+      "mechanism": "Opts API-key and third-party-provider sessions into the one-hour prompt cache TTL (default is 5 minutes for API users). Longer TTL means the cached prefix survives longer breaks between messages, so returning after a pause still hits the cache instead of reprocessing the full context.",
+      "config_location": "env block in .claude/settings.json: {\"env\": {\"ENABLE_PROMPT_CACHING_1H\": \"1\"}} or system environment variable. Note: subscription plans get 1-hour TTL automatically.",
+      "saves": "Reduces cache-miss turns for users who pause between prompts. Cache read tokens are billed at ~10% of standard input rate vs 100% on a miss.",
+      "actionable": true,
+      "evidence": "\"On an API key, Bedrock, Vertex, Foundry... the TTL stays at the cheaper five minutes by default. To opt into the one-hour TTL, set ENABLE_PROMPT_CACHING_1H=1.\" — https://code.claude.com/docs/en/prompt-caching",
+      "area": "Claude Code settings.json / configuration file reference — every key, env vars, where settings live (user vs project vs local), permissions"
+    },
+    {
+      "name": "CLAUDE_CODE_ATTRIBUTION_HEADER (env var, set to 0)",
+      "mechanism": "Omits the attribution block from the system prompt. The attribution block changes per-session, which causes system-prompt cache misses when routing through an LLM gateway where multiple Claude Code sessions share cache infrastructure. Removing it stabilizes the system prompt prefix and improves cache hit rates.",
+      "config_location": "env block in .claude/settings.json: {\"env\": {\"CLAUDE_CODE_ATTRIBUTION_HEADER\": \"0\"}} or system environment variable",
+      "saves": "Improves prompt-cache hit rates on LLM gateway deployments by making the system prompt identical across sessions, so cached input tokens are reused at ~10% billing rate instead of being reprocessed at full rate.",
+      "actionable": true,
+      "evidence": "\"CLAUDE_CODE_ATTRIBUTION_HEADER: Set to 0 to omit attribution block from system prompt, improving prompt-cache hit rates with LLM gateways.\" — https://code.claude.com/docs/en/env-vars",
+      "area": "Claude Code settings.json / configuration file reference — every key, env vars, where settings live (user vs project vs local), permissions"
+    },
+    {
+      "name": "MCP deferred tool loading (default behavior, configurable per server with alwaysLoad)",
+      "mechanism": "By default on supported models, MCP tool definitions are deferred — only tool names enter the system prompt context, and full definitions are fetched on demand via tool search when Claude actually uses a tool. This keeps the system prompt prefix smaller and avoids cache invalidation when MCP servers connect/disconnect.",
+      "config_location": ".mcp.json or ~/.claude.json MCP server definitions — avoid setting alwaysLoad: true unless a server must be fully loaded upfront. MCP tool search is on by default on supported models.",
+      "saves": "MCP tool definitions can be thousands of tokens each. Deferring them keeps the system prompt short, reducing per-turn input costs and preventing cache invalidations when servers change.",
+      "actionable": true,
+      "evidence": "\"MCP tool definitions are deferred by default, so only tool names enter context until Claude uses a specific tool.\" and \"Deferred tools... a server connecting, disconnecting, or changing its tool list only appends new content and doesn't disturb anything already cached.\" — https://code.claude.com/docs/en/costs and https://code.claude.com/docs/en/prompt-caching",
+      "area": "Claude Code settings.json / configuration file reference — every key, env vars, where settings live (user vs project vs local), permissions"
+    },
+    {
+      "name": "CLAUDE_CODE_SUBAGENT_MODEL (env var)",
+      "mechanism": "Forces all subagents and agent teams to use a specified model regardless of per-invocation model parameters or subagent frontmatter. Set to a cheap model like haiku to ensure spawned subagents do not inherit an expensive parent model.",
+      "config_location": "env block in .claude/settings.json: {\"env\": {\"CLAUDE_CODE_SUBAGENT_MODEL\": \"haiku\"}} or system environment variable. Set to \"inherit\" to restore normal resolution.",
+      "saves": "Prevents subagents from running on Opus/Sonnet when Haiku is sufficient, since agent teams can use ~7x more tokens than standard sessions and each teammate maintains its own context window.",
+      "actionable": true,
+      "evidence": "\"CLAUDE_CODE_SUBAGENT_MODEL: The model to use for all subagents and agent teams. Overrides the per-invocation model parameter and the subagent definition's model frontmatter.\" — https://code.claude.com/docs/en/model-config",
+      "area": "Claude Code settings.json / configuration file reference — every key, env vars, where settings live (user vs project vs local), permissions"
+    },
+    {
+      "name": "claudeMdExcludes (settings key)",
+      "mechanism": "Glob patterns for CLAUDE.md files to exclude from loading. Excluding irrelevant CLAUDE.md files (e.g. in vendor directories) prevents their contents from being added to the project context layer at session start, keeping the system prompt shorter.",
+      "config_location": ".claude/settings.json or ~/.claude/settings.json — key: \"claudeMdExcludes\", e.g. {\"claudeMdExcludes\": [\"**/vendor/**/CLAUDE.md\", \"**/node_modules/**/CLAUDE.md\"]}",
+      "saves": "Prevents vendor/dependency CLAUDE.md files from bloating the project context, reducing input tokens on every turn.",
+      "actionable": true,
+      "evidence": "\"claudeMdExcludes: Glob patterns for CLAUDE.md files to exclude from loading\" — https://code.claude.com/docs/en/settings",
+      "area": "Claude Code settings.json / configuration file reference — every key, env vars, where settings live (user vs project vs local), permissions"
+    },
+    {
+      "name": "Keep CLAUDE.md under 200 lines / move detailed instructions to skills",
+      "mechanism": "CLAUDE.md content is loaded into project context at session start and sent on every turn. Moving workflow-specific instructions to skills means those tokens only enter context when that skill is explicitly invoked, reducing per-turn context size for unrelated tasks.",
+      "config_location": "CLAUDE.md (project or user level) and .claude/agents/ or ~/.claude/agents/ for skill files. Invoke skills on-demand with /skill-name.",
+      "saves": "Each line removed from CLAUDE.md that moves to a skill saves those tokens on every turn where the skill is not invoked. The doc explicitly targets 'under 200 lines' for CLAUDE.md.",
+      "actionable": true,
+      "evidence": "\"Aim to keep CLAUDE.md under 200 lines by including only essentials... Skills load on-demand only when invoked, so moving specialized instructions into skills keeps your base context smaller.\" — https://code.claude.com/docs/en/costs",
+      "area": "Claude Code settings.json / configuration file reference — every key, env vars, where settings live (user vs project vs local), permissions"
+    },
+    {
+      "name": "ANTHROPIC_DEFAULT_HAIKU_MODEL / ANTHROPIC_DEFAULT_SONNET_MODEL (env vars)",
+      "mechanism": "Pin the exact model version that the haiku and sonnet aliases resolve to. This prevents Claude Code from auto-upgrading to a more capable (and more expensive) version when aliases are updated, giving cost predictability. Also controls what CLAUDE_CODE_SUBAGENT_MODEL='haiku' resolves to.",
+      "config_location": "env block in .claude/settings.json: {\"env\": {\"ANTHROPIC_DEFAULT_HAIKU_MODEL\": \"claude-haiku-4-5\", \"ANTHROPIC_DEFAULT_SONNET_MODEL\": \"claude-sonnet-4-5\"}}",
+      "saves": "Locks cost to a known model version, preventing surprise cost increases when Anthropic updates what an alias points to.",
+      "actionable": true,
+      "evidence": "\"Aliases point to the recommended version for your provider and update over time. To pin to a specific version, use the full model name... or set the corresponding environment variable like ANTHROPIC_DEFAULT_OPUS_MODEL.\" — https://code.claude.com/docs/en/model-config",
+      "area": "Claude Code settings.json / configuration file reference — every key, env vars, where settings live (user vs project vs local), permissions"
+    },
+    {
+      "name": "Workspace spend limits (Claude Console / /usage-credits command)",
+      "mechanism": "API users can set a workspace spend limit on the Claude Console to cap total Claude Code spending. Pro/Max plan users can set a monthly usage-credits spend limit with /usage-credits inside Claude Code. Claude Code will prompt before exceeding the limit.",
+      "config_location": "Claude Console UI at platform.claude.com/usage for API workspace limits. /usage-credits command inside Claude Code for Pro/Max plan limits.",
+      "saves": "Hard cap on total spend, preventing runaway costs from automation or long-running agent sessions.",
+      "actionable": true,
+      "evidence": "\"You can set workspace spend limits on the total Claude Code workspace spend. Admins can view cost and usage reporting in the Console.\" and \"On Pro and Max plans, you can set a monthly spend limit on usage credits with the /usage-credits command.\" — https://code.claude.com/docs/en/costs",
+      "area": "Claude Code settings.json / configuration file reference — every key, env vars, where settings live (user vs project vs local), permissions"
+    },
+    {
+      "name": "Workspace rate limits (TPM/RPM per user)",
+      "mechanism": "Set a workspace rate limit on the Claude Code workspace in the Claude Console to cap Claude Code's share of your org's API rate limits. The doc provides per-user TPM/RPM recommendations by team size (e.g. 15k-20k TPM per user for 100-500 users) to prevent any one workspace from consuming all capacity.",
+      "config_location": "Claude Console UI: platform.claude.com — set on the workspace's Limits page. Not a settings.json key.",
+      "saves": "Prevents individual users or automated sessions from consuming disproportionate quota, ensuring fair distribution and predictable per-user spend.",
+      "actionable": true,
+      "evidence": "\"You can set a workspace rate limit on this workspace's Limits page in the Claude Console to cap Claude Code's share and protect other production workloads.\" — https://code.claude.com/docs/en/costs",
+      "area": "Claude Code settings.json / configuration file reference — every key, env vars, where settings live (user vs project vs local), permissions"
+    },
+    {
+      "name": "PreToolUse hooks for output filtering",
+      "mechanism": "Custom PreToolUse hooks can intercept Bash commands (e.g. test runners) and rewrite them to filter output before Claude sees it. Example: grep for ERROR lines only before returning test output, reducing context from tens of thousands of tokens to hundreds.",
+      "config_location": ".claude/settings.json — hooks.PreToolUse array, e.g. {\"hooks\": {\"PreToolUse\": [{\"matcher\": \"Bash\", \"hooks\": [{\"type\": \"command\", \"command\": \"~/.claude/hooks/filter-test-output.sh\"}]}]}}",
+      "saves": "Dramatically reduces tokens consumed by verbose tool outputs (logs, test results, etc.) before they enter Claude's context.",
+      "actionable": true,
+      "evidence": "\"Custom hooks can preprocess data before Claude sees it. Instead of Claude reading a 10,000-line log file to find errors, a hook can grep for ERROR and return only matching lines, reducing context from tens of thousands of tokens to hundreds.\" — https://code.claude.com/docs/en/costs",
+      "area": "Claude Code settings.json / configuration file reference — every key, env vars, where settings live (user vs project vs local), permissions"
+    },
+    {
+      "name": "CLAUDE_CODE_DISABLE_1M_CONTEXT (env var)",
+      "mechanism": "Disables 1M context window support, removing the 1M model variants from the /model picker. On plans where 1M context requires usage credits, this prevents accidental selection of the 1M variant and the associated billing.",
+      "config_location": "env block in .claude/settings.json: {\"env\": {\"CLAUDE_CODE_DISABLE_1M_CONTEXT\": \"1\"}} or system environment variable",
+      "saves": "On Pro and Bedrock/Vertex plans where 1M context requires usage credits, prevents accidental usage of the expensive extended-context window.",
+      "actionable": true,
+      "evidence": "\"CLAUDE_CODE_DISABLE_1M_CONTEXT: Set to 1 to disable 1M context window support. This removes 1M model variants from the model picker.\" — https://code.claude.com/docs/en/env-vars",
+      "area": "Claude Code settings.json / configuration file reference — every key, env vars, where settings live (user vs project vs local), permissions"
+    },
+    {
+      "name": "disableAllHooks / CLAUDE_CODE_DISABLE_BACKGROUND_TASKS (settings/env)",
+      "mechanism": "disableAllHooks (settings key) disables all hook execution. CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 disables background task spawning. Both eliminate background API calls that consume tokens outside the main conversation.",
+      "config_location": ".claude/settings.json key: {\"disableAllHooks\": true} for hooks. env block: {\"env\": {\"CLAUDE_CODE_DISABLE_BACKGROUND_TASKS\": \"1\"}} for background tasks.",
+      "saves": "Eliminates any background API token consumption from hooks or background agents when those features are not needed.",
+      "actionable": true,
+      "evidence": "\"CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: Set to 1 to disable all background task functionality\" and \"disableAllHooks\" key documented in settings reference — https://code.claude.com/docs/en/env-vars and https://code.claude.com/docs/en/settings",
+      "area": "Claude Code settings.json / configuration file reference — every key, env vars, where settings live (user vs project vs local), permissions"
+    },
+    {
+      "name": "model field in settings.json (per-project or user-level)",
+      "mechanism": "Sets the default model for every session that starts in that project (or globally). Project-level .claude/settings.json overrides the user default; managed/policy settings override both. By pinning a cheaper alias such as 'sonnet' or 'haiku', every session avoids starting on Opus 4.8 (the default for Max/Team/Enterprise pay-as-you-go), eliminating unnecessary Opus spend on routine coding tasks.",
+      "config_location": ".claude/settings.json (project) or ~/.claude/settings.json (user), key: \"model\", e.g. {\"model\": \"sonnet\"}",
+      "saves": "Prevents defaulting to Opus 4.8 on high-tier plans for every session; Sonnet costs ~10x less per token than Opus.",
+      "actionable": true,
+      "evidence": "\"Configure permanently in your settings file using the model field.\" — https://code.claude.com/docs/en/model-config. Default for Max/Team Premium/Enterprise pay-as-you-go is Opus 4.8; for Pro/Team Standard it is Sonnet 4.6.",
+      "area": "Claude Code model selection — default model, /model command, per-project model config, ANTHROPIC_MODEL and alias env vars, choosing cheaper models to save quota"
+    },
+    {
+      "name": "/model command (interactive model switch)",
+      "mechanism": "Run /model <alias|name> to switch the active model mid-session. As of v2.1.153, pressing Enter in the picker saves the choice as the user-level default (writes model field to ~/.claude/settings.json). Pressing 's' switches for the current session only. Allows dropping to haiku or sonnet instantly without restarting.",
+      "config_location": "CLI command: /model haiku   or   /model sonnet   (interactive; persists to ~/.claude/settings.json on Enter)",
+      "saves": "On-demand downgrade from Opus to Sonnet or Haiku for simpler tasks in the current or all future sessions.",
+      "actionable": true,
+      "evidence": "\"As of v2.1.153, /model saves your choice as the default for new sessions by writing the model field in your user settings.\" — https://code.claude.com/docs/en/model-config",
+      "area": "Claude Code model selection — default model, /model command, per-project model config, ANTHROPIC_MODEL and alias env vars, choosing cheaper models to save quota"
+    },
+    {
+      "name": "ANTHROPIC_MODEL environment variable",
+      "mechanism": "Sets the model for one CLI session at launch. Lower priority than --model flag, higher than settings. Useful in shell profiles or CI scripts to force Sonnet/Haiku without editing settings files. Applies only to the session launched with it.",
+      "config_location": "Shell env or .env: ANTHROPIC_MODEL=sonnet  (or haiku, claude-haiku-4-5, etc.)",
+      "saves": "Prevents expensive model from being used in automated/CI sessions where the cost-optimized model is always appropriate.",
+      "actionable": true,
+      "evidence": "\"Environment variable — Set ANTHROPIC_MODEL=<alias|name>\" listed as priority 3 in the precedence order. — https://code.claude.com/docs/en/model-config",
+      "area": "Claude Code model selection — default model, /model command, per-project model config, ANTHROPIC_MODEL and alias env vars, choosing cheaper models to save quota"
+    },
+    {
+      "name": "ANTHROPIC_DEFAULT_HAIKU_MODEL (replaces deprecated ANTHROPIC_SMALL_FAST_MODEL)",
+      "mechanism": "Controls what model the 'haiku' alias and background/fast-path functionality resolve to. Setting this lets you pin Haiku to a specific version or route background tasks to the cheapest available model. ANTHROPIC_SMALL_FAST_MODEL is deprecated in favor of this variable.",
+      "config_location": "Shell env or settings.json env block: ANTHROPIC_DEFAULT_HAIKU_MODEL=claude-haiku-4-5",
+      "saves": "Ensures background Claude Code operations and subagents using the haiku alias use the cheapest model; prevents accidental fallback to a more expensive version.",
+      "actionable": true,
+      "evidence": "\"ANTHROPIC_DEFAULT_HAIKU_MODEL — The model to use for haiku, or background functionality\" and \"Note: ANTHROPIC_SMALL_FAST_MODEL is deprecated in favor of ANTHROPIC_DEFAULT_HAIKU_MODEL.\" — https://code.claude.com/docs/en/model-config",
+      "area": "Claude Code model selection — default model, /model command, per-project model config, ANTHROPIC_MODEL and alias env vars, choosing cheaper models to save quota"
+    },
+    {
+      "name": "ANTHROPIC_DEFAULT_SONNET_MODEL env var",
+      "mechanism": "Pins the 'sonnet' alias (and the execution phase of 'opusplan') to a specific Sonnet version. Prevents automatic upgrade to a newer, potentially more expensive Sonnet release. Also used to set opusplan's execution-phase model.",
+      "config_location": "Shell env or settings.json env block: ANTHROPIC_DEFAULT_SONNET_MODEL=claude-sonnet-4-5",
+      "saves": "Version-pins Sonnet costs; useful for Bedrock/Vertex/Foundry where the latest alias may lag and an older cheaper version is preferred.",
+      "actionable": true,
+      "evidence": "\"ANTHROPIC_DEFAULT_SONNET_MODEL — The model to use for sonnet, or for opusplan when Plan Mode is not active.\" — https://code.claude.com/docs/en/model-config",
+      "area": "Claude Code model selection — default model, /model command, per-project model config, ANTHROPIC_MODEL and alias env vars, choosing cheaper models to save quota"
+    },
+    {
+      "name": "opusplan model alias",
+      "mechanism": "Uses Opus only during /plan (plan mode) for architecture/reasoning, then automatically switches to Sonnet for code generation and execution. This hybrid approach avoids paying Opus rates for the bulk of token consumption (code writing) while retaining Opus quality for planning.",
+      "config_location": ".claude/settings.json: {\"model\": \"opusplan\"}   or   /model opusplan   or   claude --model opusplan",
+      "saves": "Reduces cost compared to full Opus sessions by using Sonnet for execution, which typically represents the majority of tokens consumed.",
+      "actionable": true,
+      "evidence": "\"opusplan — Special mode that uses opus during plan mode, then switches to sonnet for execution.\" — https://code.claude.com/docs/en/model-config",
+      "area": "Claude Code model selection — default model, /model command, per-project model config, ANTHROPIC_MODEL and alias env vars, choosing cheaper models to save quota"
+    },
+    {
+      "name": "haiku alias for subagents",
+      "mechanism": "Subagent definitions (markdown frontmatter) can specify model: haiku to run sub-tasks on Haiku instead of inheriting the session model. Since agent teams use ~7x more tokens than standard sessions, running teammates on Haiku drastically cuts cost.",
+      "config_location": "Subagent .md frontmatter field: model: haiku   OR   env var CLAUDE_CODE_SUBAGENT_MODEL=haiku",
+      "saves": "Cuts subagent/agent-team token cost; Haiku is the cheapest model; docs explicitly recommend 'Use Sonnet for teammates' and to 'specify model: haiku in your subagent configuration' for simple tasks.",
+      "actionable": true,
+      "evidence": "\"For simple subagent tasks, specify model: haiku in your subagent configuration.\" and \"Use Sonnet for teammates. It balances capability and cost for coordination tasks.\" — https://code.claude.com/docs/en/costs",
+      "area": "Claude Code model selection — default model, /model command, per-project model config, ANTHROPIC_MODEL and alias env vars, choosing cheaper models to save quota"
+    },
+    {
+      "name": "CLAUDE_CODE_SUBAGENT_MODEL env var",
+      "mechanism": "Overrides the model for ALL subagents and agent teams globally, superseding per-invocation model parameters and subagent frontmatter. Setting it to 'haiku' or 'sonnet' ensures all spawned subagents use a cheaper model regardless of how they are defined.",
+      "config_location": "Shell env or settings.json env block: CLAUDE_CODE_SUBAGENT_MODEL=haiku",
+      "saves": "Centralized cost control for all subagent/agent-team token spend without editing every subagent definition.",
+      "actionable": true,
+      "evidence": "\"CLAUDE_CODE_SUBAGENT_MODEL — The model to use for all subagents and agent teams. Overrides the per-invocation model parameter and the subagent definition's model frontmatter.\" — https://code.claude.com/docs/en/model-config",
+      "area": "Claude Code model selection — default model, /model command, per-project model config, ANTHROPIC_MODEL and alias env vars, choosing cheaper models to save quota"
+    },
+    {
+      "name": "effortLevel setting (low/medium reduces thinking tokens)",
+      "mechanism": "Controls adaptive reasoning depth. 'low' and 'medium' generate far fewer thinking tokens (billed as output tokens) than the default 'high'. For straightforward coding tasks, lower effort is faster and cheaper. Persists across sessions when set in settings.json; overridden per-session with /effort or --effort flag.",
+      "config_location": ".claude/settings.json: {\"effortLevel\": \"medium\"}   or env CLAUDE_CODE_EFFORT_LEVEL=medium   or CLI /effort medium",
+      "saves": "Reduces thinking/output tokens significantly; thinking tokens are billed as output tokens and the default high budget can be tens of thousands of tokens per request.",
+      "actionable": true,
+      "evidence": "\"lower effort is faster and cheaper for straightforward tasks\" and \"Thinking tokens are billed as output tokens, and the default budget can be tens of thousands of tokens per request\" — https://code.claude.com/docs/en/costs",
+      "area": "Claude Code model selection — default model, /model command, per-project model config, ANTHROPIC_MODEL and alias env vars, choosing cheaper models to save quota"
+    },
+    {
+      "name": "availableModels allowlist (restrict to cheaper models)",
+      "mechanism": "Enterprise/project admins can set availableModels in managed or policy settings to restrict the /model picker and ANTHROPIC_MODEL to only listed models (e.g. ['sonnet','haiku']). Combined with enforceAvailableModels: true, even the Default option is constrained, preventing users from escaping to Opus.",
+      "config_location": "Managed/policy settings (or .claude/settings.json for project scope): {\"availableModels\": [\"sonnet\", \"haiku\"], \"enforceAvailableModels\": true}",
+      "saves": "Prevents team members from selecting expensive Opus or Fable 5 models, keeping all sessions on cheaper alternatives.",
+      "actionable": true,
+      "evidence": "\"Enterprise administrators can use availableModels in managed or policy settings to restrict which models users can select.\" — https://code.claude.com/docs/en/model-config",
+      "area": "Claude Code model selection — default model, /model command, per-project model config, ANTHROPIC_MODEL and alias env vars, choosing cheaper models to save quota"
+    },
+    {
+      "name": "fallbackModel setting (avoid failures that trigger retries on expensive model)",
+      "mechanism": "Configures an ordered list of cheaper fallback models to try when the primary model is overloaded. Instead of failing (which often leads to retry on the same expensive model), Claude Code automatically falls back to e.g. Sonnet then Haiku. Prevents wasted tokens from failed requests being re-sent.",
+      "config_location": ".claude/settings.json: {\"fallbackModel\": [\"claude-sonnet-4-6\", \"claude-haiku-4-5\"]}   or CLI --fallback-model sonnet,haiku",
+      "saves": "Avoids request failures and retries by gracefully degrading to cheaper models during overload; keeps sessions productive at lower cost.",
+      "actionable": true,
+      "evidence": "\"When the primary model is overloaded, unavailable, or returns another non-retryable server error, Claude Code can switch to a fallback model instead of failing the request.\" — https://code.claude.com/docs/en/model-config",
+      "area": "Claude Code model selection — default model, /model command, per-project model config, ANTHROPIC_MODEL and alias env vars, choosing cheaper models to save quota"
+    },
+    {
+      "name": "CLAUDE_CODE_DISABLE_1M_CONTEXT=1",
+      "mechanism": "Disables the 1M-token context window variants, removing them from the /model picker. On plans where extended context is billed via usage credits (Pro, and Sonnet on all subscription plans), forcing 200K context avoids usage-credit charges for longer sessions.",
+      "config_location": "Shell env or settings.json env block: CLAUDE_CODE_DISABLE_1M_CONTEXT=1",
+      "saves": "Prevents accidental selection of 1M-context variants that consume usage credits on plans where they are not included in the subscription.",
+      "actionable": true,
+      "evidence": "\"To disable 1M context entirely, set CLAUDE_CODE_DISABLE_1M_CONTEXT=1. This removes 1M model variants from the model picker.\" — https://code.claude.com/docs/en/model-config",
+      "area": "Claude Code model selection — default model, /model command, per-project model config, ANTHROPIC_MODEL and alias env vars, choosing cheaper models to save quota"
+    },
+    {
+      "name": "Status line context-window display",
+      "mechanism": "Continuously shows context window fill percentage in the terminal status line so you can proactively clear or compact before performance degrades.",
+      "config_location": "Settings: configure via /statusline or statusline settings; see https://code.claude.com/docs/en/statusline",
+      "saves": "Prevents surprise auto-compaction and lets you compact at the right moment rather than after context degrades",
+      "actionable": true,
+      "evidence": "\"configure your status line to display it continuously\" — https://code.claude.com/docs/en/costs",
+      "area": "Claude Code token usage and cost management"
+    },
+    {
+      "name": "Compaction instructions in CLAUDE.md",
+      "mechanism": "Adds a 'Compact instructions' section to CLAUDE.md that controls what auto-compaction preserves, so the right context survives every automatic compaction.",
+      "config_location": "File: CLAUDE.md (project root or ~/.claude/CLAUDE.md) — add a section like: # Compact instructions\\nWhen you are using compact, please focus on test output and code changes",
+      "saves": "Ensures auto-compaction keeps high-value tokens (test results, code changes) and discards low-value history",
+      "actionable": true,
+      "evidence": "\"You can also customize compaction behavior in your CLAUDE.md: # Compact instructions / When you are using compact, please focus on test output and code changes\" — https://code.claude.com/docs/en/costs",
+      "area": "Claude Code token usage and cost management"
+    },
+    {
+      "name": "autoCompactEnabled setting",
+      "mechanism": "When true (default), Claude Code automatically summarizes conversation history when approaching context limits, preventing context overflow without manual intervention.",
+      "config_location": "File: .claude/settings.json or ~/.claude/settings.json — key: autoCompactEnabled, value: true or false. Also togglable via /config mid-session. Env var: DISABLE_AUTO_COMPACT=1 to disable.",
+      "saves": "Prevents context from filling completely (which degrades performance) by summarizing earlier history",
+      "actionable": true,
+      "evidence": "\"auto-compaction, which summarizes conversation history when approaching context limits\" — https://code.claude.com/docs/en/costs; autoCompactEnabled key documented in settings — https://code.claude.com/docs/en/settings",
+      "area": "Claude Code token usage and cost management"
+    },
+    {
+      "name": "Model selection (sonnet vs opus vs haiku)",
+      "mechanism": "Choosing a lower-cost model (Sonnet or Haiku) for tasks that don't need Opus-class reasoning directly reduces per-token cost. The opusplan alias uses Opus only during plan mode then switches to Sonnet for execution.",
+      "config_location": "settings.json key: model — e.g. {\"model\": \"sonnet\"}. Slash command: /model sonnet. Env var: ANTHROPIC_MODEL=sonnet. Subagent frontmatter: model: haiku. Alias opusplan available for hybrid.",
+      "saves": "Eliminates Opus pricing on tasks where Sonnet or Haiku is sufficient; opusplan saves Opus spend on execution phase",
+      "actionable": true,
+      "evidence": "\"Sonnet handles most coding tasks well and costs less than Opus. Reserve Opus for complex architectural decisions or multi-step reasoning.\" — https://code.claude.com/docs/en/costs; opusplan alias documented — https://code.claude.com/docs/en/model-config",
+      "area": "Claude Code token usage and cost management"
+    },
+    {
+      "name": "Effort level adjustment",
+      "mechanism": "Controls adaptive reasoning depth (and therefore thinking token spend). Lower levels (low, medium) reduce token usage at the cost of some reasoning quality. Max level applies only for one session.",
+      "config_location": "settings.json key: effortLevel (values: low, medium, high, xhigh). Slash command: /effort [level]. Env var: CLAUDE_CODE_EFFORT_LEVEL=low. Subagent/skill frontmatter: effort: low. Note: max and ultracode are session-only and not accepted in settings.json.",
+      "saves": "Reduces thinking tokens (billed as output tokens) that can reach tens of thousands per request at higher effort levels",
+      "actionable": true,
+      "evidence": "\"thinking tokens are billed as output tokens, and the default budget can be tens of thousands of tokens per request... you can reduce costs by lowering the effort level\" — https://code.claude.com/docs/en/costs",
+      "area": "Claude Code token usage and cost management"
+    },
+    {
+      "name": "MAX_THINKING_TOKENS env var",
+      "mechanism": "Sets the maximum thinking token budget for models with a fixed thinking budget (Opus 4.6, Sonnet 4.6). Setting to 0 disables thinking entirely on those models. Has no effect on Fable 5 or adaptive-reasoning models (Opus 4.7+).",
+      "config_location": "Env var: MAX_THINKING_TOKENS=8000 (or 0 to disable). Set in settings.json under env key: {\"env\": {\"MAX_THINKING_TOKENS\": \"0\"}}. Requires CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING=1 on Opus 4.6/Sonnet 4.6 to activate fixed-budget mode.",
+      "saves": "Caps or eliminates thinking-token spend on compatible models (billed as output tokens)",
+      "actionable": true,
+      "evidence": "\"on models with a fixed thinking budget, lowering the budget with MAX_THINKING_TOKENS=8000\" — https://code.claude.com/docs/en/costs; \"Set MAX_THINKING_TOKENS=0 to disable extended thinking on the Anthropic API except on Fable 5\" — https://code.claude.com/docs/en/model-config",
+      "area": "Claude Code token usage and cost management"
+    },
+    {
+      "name": "alwaysThinkingEnabled setting",
+      "mechanism": "When set to false, disables extended thinking by default for all sessions, preventing automatic thinking token spend on simpler tasks.",
+      "config_location": "File: ~/.claude/settings.json — key: alwaysThinkingEnabled, value: false. Also configurable via /config (toggle thinking mode). Session toggle: Option+T (macOS) or Alt+T (Windows/Linux).",
+      "saves": "Eliminates thinking token spend (billed as output) on sessions or tasks where deep reasoning is not needed",
+      "actionable": true,
+      "evidence": "\"disabling thinking in /config\" to reduce costs; \"Set the global default: Run /config and toggle thinking mode. Saved as alwaysThinkingEnabled in ~/.claude/settings.json\" — https://code.claude.com/docs/en/model-config",
+      "area": "Claude Code token usage and cost management"
+    },
+    {
+      "name": "Disable unused MCP servers",
+      "mechanism": "Run /mcp to see all configured servers and disable any not actively in use. Each active MCP server contributes tool names (and schemas when invoked) to context.",
+      "config_location": "Slash command: /mcp (to view and disable). MCP server configuration lives in .claude/settings.json or ~/.claude/settings.json under mcpServers key.",
+      "saves": "Removes MCP server overhead (tool name listings at minimum) from every message in sessions where those tools are not needed",
+      "actionable": true,
+      "evidence": "\"Disable unused servers: Run /mcp to see configured servers and disable any you're not actively using\" — https://code.claude.com/docs/en/costs",
+      "area": "Claude Code token usage and cost management"
+    },
+    {
+      "name": "Prefer CLI tools over MCP servers",
+      "mechanism": "CLI tools like gh, aws, gcloud, sentry-cli run as Bash commands and add zero per-tool listing to context. MCP equivalents add tool schema overhead. Using CLI tools directly avoids that overhead.",
+      "config_location": "Behavioral preference; instruct Claude in CLAUDE.md to prefer CLI tools. Ensure CLI tools are installed and on PATH.",
+      "saves": "Eliminates per-tool schema tokens that MCP server tools add to context; CLI tools contribute no listing overhead",
+      "actionable": true,
+      "evidence": "\"Tools like gh, aws, gcloud, and sentry-cli are still more context-efficient than MCP servers because they don't add any per-tool listing\" — https://code.claude.com/docs/en/costs",
+      "area": "Claude Code token usage and cost management"
+    },
+    {
+      "name": "PreToolUse hooks for output filtering",
+      "mechanism": "Hooks preprocess data before Claude sees it — e.g. grep test output for only ERROR lines before Claude reads the result, reducing tens of thousands of tokens to hundreds.",
+      "config_location": "File: .claude/settings.json — add under hooks.PreToolUse with matcher (e.g. Bash) and a command script path. Example: {\"hooks\": {\"PreToolUse\": [{\"matcher\": \"Bash\", \"hooks\": [{\"type\": \"command\", \"command\": \"~/.claude/hooks/filter-test-output.sh\"}]}]}}",
+      "saves": "Can reduce large command outputs (log files, test results) from tens of thousands of tokens to hundreds before they enter context",
+      "actionable": true,
+      "evidence": "\"Instead of Claude reading a 10,000-line log file to find errors, a hook can grep for ERROR and return only matching lines, reducing context from tens of thousands of tokens to hundreds\" — https://code.claude.com/docs/en/costs",
+      "area": "Claude Code token usage and cost management"
+    },
+    {
+      "name": "Move CLAUDE.md workflow instructions to skills",
+      "mechanism": "Skills load on-demand when invoked; CLAUDE.md loads every session. Moving specialized workflow instructions (PR reviews, DB migrations) to .claude/skills/ keeps base context smaller.",
+      "config_location": "Create files at .claude/skills/<name>/SKILL.md. Remove workflow-specific sections from CLAUDE.md. Target: keep CLAUDE.md under 200 lines with only always-needed content.",
+      "saves": "Eliminates workflow-specific instruction tokens from every session where that workflow is not used; only loaded when the skill is invoked",
+      "actionable": true,
+      "evidence": "\"Skills load on-demand only when invoked, so moving specialized instructions into skills keeps your base context smaller. Aim to keep CLAUDE.md under 200 lines\" — https://code.claude.com/docs/en/costs",
+      "area": "Claude Code token usage and cost management"
+    },
+    {
+      "name": "Delegate verbose operations to subagents",
+      "mechanism": "Running tests, fetching docs, or processing logs in a subagent keeps verbose output in the subagent's isolated context window; only a summary returns to the main conversation.",
+      "config_location": "Behavioral: prompt Claude to 'use a subagent to...' or define subagents in .claude/agents/<name>.md with a model, tools, and description frontmatter.",
+      "saves": "Keeps main context clean from large outputs (test runs, log files, codebase explorations) that would otherwise fill it",
+      "actionable": true,
+      "evidence": "\"Delegate these to subagents so the verbose output stays in the subagent's context while only a summary returns to your main conversation\" — https://code.claude.com/docs/en/costs",
+      "area": "Claude Code token usage and cost management"
+    },
+    {
+      "name": "Code intelligence plugins",
+      "mechanism": "Language server plugins give Claude precise symbol navigation (go-to-definition) instead of text-based search, replacing grep+multi-file reads with a single lookup call.",
+      "config_location": "Install via /plugin from the marketplace. Requires a code intelligence plugin for your language (e.g. TypeScript, Python, Go).",
+      "saves": "Replaces multiple grep+file-read operations with single symbol lookups, dramatically reducing tokens spent on codebase exploration",
+      "actionable": true,
+      "evidence": "\"A single go to definition call replaces what might otherwise be a grep followed by reading multiple candidate files\" — https://code.claude.com/docs/en/costs",
+      "area": "Claude Code token usage and cost management"
+    },
+    {
+      "name": "CLAUDE_CODE_SUBAGENT_MODEL env var",
+      "mechanism": "Forces all subagents and agent teams to use a specified cheaper model (e.g. haiku) regardless of per-subagent model frontmatter, ensuring low-cost models handle delegation tasks.",
+      "config_location": "Env var: CLAUDE_CODE_SUBAGENT_MODEL=haiku. Set in settings.json under env: {\"env\": {\"CLAUDE_CODE_SUBAGENT_MODEL\": \"haiku\"}}. Note: set to 'inherit' to restore per-subagent model resolution.",
+      "saves": "Forces all subagent work onto a cheaper model, reducing cost of investigation, verification, and delegation tasks that don't require Opus/Sonnet capability",
+      "actionable": true,
+      "evidence": "\"CLAUDE_CODE_SUBAGENT_MODEL: The model to use for all subagents and agent teams. Overrides the per-invocation model parameter and the subagent definition's model frontmatter.\" — https://code.claude.com/docs/en/model-config",
+      "area": "Claude Code token usage and cost management"
+    },
+    {
+      "name": "Agent team size and spawn prompt discipline",
+      "mechanism": "Each agent team teammate runs its own context window, so team size directly multiplies token spend (~7x vs standard for plan mode). Keep teams small, spawn prompts focused, and shut down teammates when done.",
+      "config_location": "Agent teams disabled by default. Enable with env var CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 in settings.json or environment. Control team size in spawn prompts.",
+      "saves": "Agent teams in plan mode use ~7x more tokens than standard sessions; keeping teams small and prompts focused limits per-teammate context size",
+      "actionable": true,
+      "evidence": "\"Agent teams use approximately 7x more tokens than standard sessions when teammates run in plan mode... Keep team tasks small and self-contained\" — https://code.claude.com/docs/en/costs",
+      "area": "Claude Code token usage and cost management"
+    },
+    {
+      "name": "Workspace spend limits",
+      "mechanism": "Admins can set a cap on total Claude Code workspace spend in the Console; the API stops accepting requests once the limit is hit, preventing runaway cost.",
+      "config_location": "Console UI: platform.claude.com — set on the workspace Limits page. For Pro/Max: /usage-credits command to set a monthly spend limit on usage credits.",
+      "saves": "Hard cap on total spend; prevents runaway cost from automation or high-concurrency use cases",
+      "actionable": true,
+      "evidence": "\"you can set workspace spend limits on the total Claude Code workspace spend. Admins can view cost and usage reporting in the Console\" — https://code.claude.com/docs/en/costs",
+      "area": "Claude Code token usage and cost management"
+    },
+    {
+      "name": "opusplan model alias",
+      "mechanism": "Uses Opus only during plan mode for complex reasoning, then automatically switches to Sonnet for execution/implementation, giving Opus reasoning quality at Sonnet execution cost.",
+      "config_location": "settings.json key: model set to opusplan. Or slash command: /model opusplan. Variant: opusplan[1m] for 1M context in both phases.",
+      "saves": "Saves Opus pricing on the implementation/execution phase (typically the longer, more token-heavy phase) while retaining Opus quality for planning",
+      "actionable": true,
+      "evidence": "\"opusplan: Special mode that uses opus during plan mode, then switches to sonnet for execution\" — https://code.claude.com/docs/en/model-config",
+      "area": "Claude Code token usage and cost management"
+    },
+    {
+      "name": "CLAUDE_CODE_DISABLE_1M_CONTEXT env var",
+      "mechanism": "Disables 1M context window variants, keeping sessions on the standard 200K window and preventing accidental use of extended context (which on some plans costs usage credits).",
+      "config_location": "Env var: CLAUDE_CODE_DISABLE_1M_CONTEXT=1. Set in settings.json under env: {\"env\": {\"CLAUDE_CODE_DISABLE_1M_CONTEXT\": \"1\"}}. Removes 1M model variants from the /model picker.",
+      "saves": "Prevents accidental usage-credit spend on 1M context on plans where it is not included (Pro, or Sonnet on any subscription plan)",
+      "actionable": true,
+      "evidence": "\"To disable 1M context entirely, set CLAUDE_CODE_DISABLE_1M_CONTEXT=1. This removes 1M model variants from the model picker.\" — https://code.claude.com/docs/en/model-config",
+      "area": "Claude Code token usage and cost management"
+    },
+    {
+      "name": "availableModels + enforceAvailableModels (enterprise)",
+      "mechanism": "Admins restrict which models users can select, preventing individual users from switching to more expensive models (e.g. Opus) when cheaper ones suffice for their work.",
+      "config_location": "Managed/policy settings.json (must be in managed or policy location to enforce): {\"availableModels\": [\"sonnet\", \"haiku\"], \"enforceAvailableModels\": true}. Requires Claude Code v2.1.175+.",
+      "saves": "Prevents unauthorized model upgrades by users; enforces org-wide model cost policy",
+      "actionable": true,
+      "evidence": "\"Enterprise administrators can use availableModels in managed or policy settings to restrict which models users can select\" — https://code.claude.com/docs/en/model-config",
+      "area": "Claude Code token usage and cost management"
+    },
+    {
+      "name": "subagent `model` frontmatter field",
+      "mechanism": "Each subagent .md file can declare a `model` field (alias or full model ID). Setting it to `haiku` routes that subagent's work to the cheapest/fastest model, leaving the main thread on a more capable model. Without this field it defaults to `inherit` (same model as main conversation).",
+      "config_location": ".claude/agents/<name>.md or ~/.claude/agents/<name>.md — YAML frontmatter key `model`, e.g. `model: haiku`",
+      "saves": "Removes per-subagent cost inflation: a Haiku subagent doing read-only scanning or log parsing costs ~10-20x less per token than the same work in an Opus/Sonnet main session.",
+      "actionable": true,
+      "evidence": "\"Control costs by routing tasks to faster, cheaper models like Haiku\" and \"For simple subagent tasks, specify model: haiku in your subagent configuration\" — https://code.claude.com/docs/en/sub-agents and https://code.claude.com/docs/en/costs",
+      "area": "Claude Code subagents and the Task/Agent tool — offloading context to subagents and assigning cheaper models to reduce main-thread token spend"
+    },
+    {
+      "name": "CLAUDE_CODE_SUBAGENT_MODEL environment variable",
+      "mechanism": "Global override that forces ALL subagents and agent-team members to use a specified model, regardless of per-subagent `model` frontmatter or the per-invocation `model` parameter. Overrides every other model-resolution step for subagents. Set to `inherit` to re-enable normal resolution.",
+      "config_location": "Environment variable `CLAUDE_CODE_SUBAGENT_MODEL=<alias|full-model-id>`, e.g. `CLAUDE_CODE_SUBAGENT_MODEL=haiku`. Can also be placed in settings.json under the `env` key.",
+      "saves": "Pins every spawned subagent to a cheap model fleet-wide, preventing any subagent from accidentally running on Opus when only Haiku-class reasoning is needed.",
+      "actionable": true,
+      "evidence": "\"The model to use for all subagents and agent teams. Overrides the per-invocation model parameter and the subagent definition's model frontmatter. Set to inherit to use normal model resolution instead\" — https://code.claude.com/docs/en/model-config#environment-variables",
+      "area": "Claude Code subagents and the Task/Agent tool — offloading context to subagents and assigning cheaper models to reduce main-thread token spend"
+    },
+    {
+      "name": "Built-in Explore subagent (Haiku, read-only, skips CLAUDE.md + git status)",
+      "mechanism": "The built-in Explore subagent runs on Haiku, restricts tool access to read-only operations, and deliberately skips loading CLAUDE.md files and the parent session git status. This keeps codebase exploration fast and cheap without polluting the main conversation context with search results.",
+      "config_location": "No configuration needed — automatically used when Claude delegates exploration tasks. To disable it: settings.json `permissions.deny` array entry `Agent(Explore)`. To prevent it globally via CLI: `--disallowedTools \"Agent(Explore)\"`",
+      "saves": "Removes exploration output from the main context window (keeping main thread smaller) and uses Haiku pricing instead of Sonnet/Opus for file searches, grep, codebase scans.",
+      "actionable": true,
+      "evidence": "\"Explore and Plan skip your CLAUDE.md files and the parent session's git status to keep research fast and inexpensive\" and \"Model: Haiku (fast, low-latency)\" — https://code.claude.com/docs/en/sub-agents#built-in-subagents",
+      "area": "Claude Code subagents and the Task/Agent tool — offloading context to subagents and assigning cheaper models to reduce main-thread token spend"
+    },
+    {
+      "name": "Subagent tool restriction via `tools` and `disallowedTools` frontmatter",
+      "mechanism": "Limiting a subagent to only the tools it actually needs (e.g. `tools: Read, Grep, Glob, Bash`) prevents it from loading MCP server schemas or heavier tool definitions it would not use, reducing per-turn token overhead from tool-definition injection.",
+      "config_location": ".claude/agents/<name>.md — YAML frontmatter key `tools` (allowlist) or `disallowedTools` (denylist). E.g. `tools: Read, Grep, Glob` or `disallowedTools: Write, Edit, mcp__github`",
+      "saves": "Removes unnecessary tool definition tokens from each subagent turn; each MCP server tool schema can cost hundreds to thousands of tokens per request.",
+      "actionable": true,
+      "evidence": "\"To restrict tools, use either the tools field (allowlist) or the disallowedTools field (denylist)\" — https://code.claude.com/docs/en/sub-agents#available-tools",
+      "area": "Claude Code subagents and the Task/Agent tool — offloading context to subagents and assigning cheaper models to reduce main-thread token spend"
+    },
+    {
+      "name": "Scope MCP servers to subagents via `mcpServers` frontmatter (keep them out of main context)",
+      "mechanism": "Defining an MCP server inline in a subagent's `mcpServers` frontmatter rather than in `.mcp.json` keeps all that server's tool schemas out of the main conversation entirely. The subagent connects to the server only during its run; the parent conversation never sees the tool definitions.",
+      "config_location": ".claude/agents/<name>.md — YAML frontmatter key `mcpServers` with inline server definition (stdio/http/sse/ws). E.g. `mcpServers: [playwright: {type: stdio, command: npx, args: [\"-y\", \"@playwright/mcp@latest\"]}]`",
+      "saves": "Prevents MCP tool definitions (which can each consume hundreds of tokens) from inflating the main context window when those tools are only needed inside a subagent.",
+      "actionable": true,
+      "evidence": "\"To keep an MCP server out of the main conversation entirely and avoid its tool descriptions consuming context there, define it inline here rather than in .mcp.json\" — https://code.claude.com/docs/en/sub-agents#scope-mcp-servers-to-a-subagent",
+      "area": "Claude Code subagents and the Task/Agent tool — offloading context to subagents and assigning cheaper models to reduce main-thread token spend"
+    },
+    {
+      "name": "subagent `effort` frontmatter field",
+      "mechanism": "The `effort` field in a subagent's markdown frontmatter overrides the session effort level (low/medium/high/xhigh/max) while that subagent is running. Setting a subagent to `effort: low` or `effort: medium` reduces adaptive reasoning token spend for subagents doing mechanical or read-only work.",
+      "config_location": ".claude/agents/<name>.md — YAML frontmatter key `effort`. E.g. `effort: low`. Valid values: `low`, `medium`, `high`, `xhigh`, `max` (available levels depend on model).",
+      "saves": "Cuts extended-thinking output tokens for subagents performing straightforward operations (file reading, grep, log parsing) where deep reasoning adds no value. Thinking tokens are billed as output tokens.",
+      "actionable": true,
+      "evidence": "\"effort — Effort level when this subagent is active. Overrides the session effort level. Default: inherits from session. Options: low, medium, high, xhigh, max\" — https://code.claude.com/docs/en/sub-agents#supported-frontmatter-fields",
+      "area": "Claude Code subagents and the Task/Agent tool — offloading context to subagents and assigning cheaper models to reduce main-thread token spend"
+    },
+    {
+      "name": "subagent `maxTurns` frontmatter field",
+      "mechanism": "Caps the number of agentic turns (tool calls + responses) a subagent can execute before stopping. Without a cap, runaway subagents can accumulate large token counts. Setting a tight `maxTurns` appropriate for the task bounds worst-case subagent cost.",
+      "config_location": ".claude/agents/<name>.md — YAML frontmatter key `maxTurns`. E.g. `maxTurns: 10`",
+      "saves": "Prevents unbounded token accumulation in runaway or confused subagents; each additional turn on a large context costs proportionally more due to prompt re-send.",
+      "actionable": true,
+      "evidence": "\"maxTurns — Maximum number of agentic turns before the subagent stops\" — https://code.claude.com/docs/en/sub-agents#supported-frontmatter-fields",
+      "area": "Claude Code subagents and the Task/Agent tool — offloading context to subagents and assigning cheaper models to reduce main-thread token spend"
+    },
+    {
+      "name": "Fork subagent prompt-cache sharing with parent",
+      "mechanism": "A fork subagent (`/fork <directive>` or spawned via CLAUDE_CODE_FORK_SUBAGENT=1) inherits the parent conversation's system prompt and tool definitions verbatim, which means its first request reuses the parent's existing prompt cache. No cache warm-up cost is paid. A fresh named subagent has a separate cache.",
+      "config_location": "Slash command `/fork <directive>` in interactive mode. Or env var `CLAUDE_CODE_FORK_SUBAGENT=1` to let Claude spawn forks automatically. Requires Claude Code v2.1.117+; /fork enabled by default from v2.1.161+.",
+      "saves": "Eliminates the cache warm-up cost for side tasks that need the same system prompt and tools as the main session, reducing the effective cost of that subagent's first request.",
+      "actionable": true,
+      "evidence": "\"Because a fork's system prompt and tool definitions are identical to the parent, its first request reuses the parent's prompt cache. This makes forking cheaper than spawning a fresh subagent for tasks that need the same context\" — https://code.claude.com/docs/en/sub-agents#how-forks-differ-from-named-subagents",
+      "area": "Claude Code subagents and the Task/Agent tool — offloading context to subagents and assigning cheaper models to reduce main-thread token spend"
+    },
+    {
+      "name": "CLAUDE_AGENT_SDK_DISABLE_BUILTIN_AGENTS environment variable",
+      "mechanism": "In non-interactive/headless mode (via -p or the Agent SDK), setting this to 1 disables all built-in subagent types (Explore, Plan, general-purpose, etc.). This prevents the overhead of registering and potentially auto-spawning built-in agents you don't need, and lets you supply only precisely scoped custom agents.",
+      "config_location": "Environment variable `CLAUDE_AGENT_SDK_DISABLE_BUILTIN_AGENTS=1`. Only applies in non-interactive mode (`-p` flag / Agent SDK).",
+      "saves": "Removes automatic delegation to built-in subagents that may not be optimal for a pipeline's cost profile, letting the caller control exactly which agents run and with which models.",
+      "actionable": true,
+      "evidence": "\"Set to 1 to disable all built-in subagent types such as Explore and Plan. Only applies in non-interactive mode (the -p flag)\" — https://code.claude.com/docs/en/env-vars",
+      "area": "Claude Code subagents and the Task/Agent tool — offloading context to subagents and assigning cheaper models to reduce main-thread token spend"
+    },
+    {
+      "name": "opusplan model alias — use Opus only during plan mode, Sonnet during execution",
+      "mechanism": "The `opusplan` model alias uses `opus` while Claude Code is in plan mode (read-only exploration/planning) and automatically switches to `sonnet` for code generation and implementation. This means the expensive model is used only for architectural reasoning, not for line-by-line code output.",
+      "config_location": "settings.json key `model` set to `opusplan`, or `/model opusplan` command, or `--model opusplan` CLI flag, or `ANTHROPIC_MODEL=opusplan` env var.",
+      "saves": "Reduces execution-phase costs by using Sonnet instead of Opus for the bulk of token output, while preserving Opus quality for the planning phase that determines correctness.",
+      "actionable": true,
+      "evidence": "\"opusplan — Special mode that uses opus during plan mode, then switches to sonnet for execution\" — https://code.claude.com/docs/en/model-config#model-aliases",
+      "area": "Claude Code subagents and the Task/Agent tool — offloading context to subagents and assigning cheaper models to reduce main-thread token spend"
+    },
+    {
+      "name": "Subagent `memory` field for cross-session persistent knowledge (avoid re-exploration)",
+      "mechanism": "The `memory` field gives a subagent a persistent directory where it accumulates codebase knowledge (patterns, paths, architectural decisions) across conversations. On subsequent invocations, the subagent reads this memory instead of re-exploring the codebase from scratch, reducing exploration turns.",
+      "config_location": ".claude/agents/<name>.md — YAML frontmatter key `memory`. Values: `user` (~/.claude/agent-memory/<name>/), `project` (.claude/agent-memory/<name>/), or `local` (.claude/agent-memory-local/<name>/). The first 200 lines or 25KB of MEMORY.md in that directory are injected at startup.",
+      "saves": "Avoids repeating expensive codebase-exploration turns on every invocation; accumulated knowledge replaces multiple Read/Grep calls that would otherwise consume tokens.",
+      "actionable": true,
+      "evidence": "\"The memory field gives the subagent a persistent directory that survives across conversations. The subagent uses this directory to build up knowledge over time, such as codebase patterns, debugging insights, and architectural decisions\" — https://code.claude.com/docs/en/sub-agents#enable-persistent-memory",
+      "area": "Claude Code subagents and the Task/Agent tool — offloading context to subagents and assigning cheaper models to reduce main-thread token spend"
+    },
+    {
+      "name": "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS to prevent unintended parallel subagent spawning",
+      "mechanism": "Setting this to 1 disables all background task functionality. In agentic workflows where cost control is critical, this prevents Claude from spawning unintended background subagents (each consuming their own context window) and forces all delegation to be explicit and synchronous.",
+      "config_location": "Environment variable `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`.",
+      "saves": "Prevents unintended token spend from background subagents running concurrently without the user's awareness; each background agent maintains its own context window and billing.",
+      "actionable": true,
+      "evidence": "\"Set to 1 to disable all background task functionality, including the run_in_background parameter on Bash and subagent tools, auto-backgrounding, and the Ctrl+B shortcut\" — https://code.claude.com/docs/en/env-vars",
+      "area": "Claude Code subagents and the Task/Agent tool — offloading context to subagents and assigning cheaper models to reduce main-thread token spend"
+    },
+    {
+      "name": "Preload skills into subagents instead of using Skill tool during execution",
+      "mechanism": "The `skills` frontmatter field injects named skill content into a subagent's context at startup instead of requiring the subagent to discover and invoke skills via tool calls during execution. This trades a fixed upfront context cost for zero mid-task tool-call round trips.",
+      "config_location": ".claude/agents/<name>.md — YAML frontmatter key `skills` as a list of skill names. E.g. `skills: [api-conventions, error-handling-patterns]`",
+      "saves": "Eliminates Skill tool call overhead (each tool call = a turn = tokens). When domain knowledge is always needed, preloading is cheaper than repeated on-demand invocations.",
+      "actionable": true,
+      "evidence": "\"Use the skills field to inject skill content into a subagent's context at startup. This gives the subagent domain knowledge without requiring it to discover and load skills during execution\" — https://code.claude.com/docs/en/sub-agents#preload-skills-into-subagents",
+      "area": "Claude Code subagents and the Task/Agent tool — offloading context to subagents and assigning cheaper models to reduce main-thread token spend"
+    },
+    {
+      "name": "availableModels managed setting to restrict subagent model choices",
+      "mechanism": "Enterprise admins can set `availableModels` in managed/policy settings to allowlist only cost-appropriate models. This restriction applies to subagent `model` frontmatter, the Agent tool's `model` parameter, and CLAUDE_CODE_SUBAGENT_MODEL, preventing any subagent from being routed to a more expensive model.",
+      "config_location": "Managed settings .claude/settings.json (organization-wide): key `availableModels` as a JSON array. E.g. `{\"availableModels\": [\"sonnet\", \"haiku\"]}`. Can be combined with `enforceAvailableModels: true` to block the Default option as well.",
+      "saves": "Fleet-wide enforcement that no subagent accidentally runs on Opus/Fable when Sonnet or Haiku is sufficient; reduces uncontrolled cost spikes from misconfigured agent definitions.",
+      "actionable": true,
+      "evidence": "\"When availableModels is set, the allowlist applies everywhere a user can specify a model... Subagent models: the model field in subagent frontmatter, the Agent tool's model parameter, the model picker in /agents, and CLAUDE_CODE_SUBAGENT_MODEL\" — https://code.claude.com/docs/en/model-config#restrict-model-selection",
+      "area": "Claude Code subagents and the Task/Agent tool — offloading context to subagents and assigning cheaper models to reduce main-thread token spend"
+    },
+    {
+      "name": "Subagent auto-compaction via CLAUDE_AUTOCOMPACT_PCT_OVERRIDE",
+      "mechanism": "Subagents support the same auto-compaction logic as the main conversation. Setting CLAUDE_AUTOCOMPACT_PCT_OVERRIDE to a lower percentage (e.g. 50) causes compaction to trigger earlier in a subagent's run, summarizing history before the context grows very large. This keeps per-turn costs lower for long-running subagents.",
+      "config_location": "Environment variable `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=<1-100>`. Also `CLAUDE_CODE_AUTO_COMPACT_WINDOW=<tokens>` to set the effective window size for compaction calculations.",
+      "saves": "Reduces the token payload for each subsequent turn in a long-running subagent by triggering compaction before the context window fills, replacing detailed history with a compact summary.",
+      "actionable": true,
+      "evidence": "\"Subagents support automatic compaction using the same logic as the main conversation. Compaction triggers under the same conditions, and CLAUDE_AUTOCOMPACT_PCT_OVERRIDE applies to subagents as well\" — https://code.claude.com/docs/en/sub-agents#auto-compaction",
+      "area": "Claude Code subagents and the Task/Agent tool — offloading context to subagents and assigning cheaper models to reduce main-thread token spend"
+    },
+    {
+      "name": "Enable 1-hour cache TTL (API key / cloud provider)",
+      "mechanism": "Sets cache TTL from 5 minutes to 1 hour via the env var ENABLE_PROMPT_CACHING_1H=1. Cache writes cost 2x base input price instead of 1.25x, but cache reads remain at 0.1x. Pays off if the same prefix is read more than ~2.2 times per hour. On Claude subscription plans, 1h TTL is applied automatically at no extra cost.",
+      "config_location": "Environment variable ENABLE_PROMPT_CACHING_1H=1, set in .claude/settings.json under the env block for org-wide policy, or in shell environment for per-session use",
+      "saves": "Eliminates full-prefix reprocessing for sessions with pauses longer than 5 minutes but shorter than 1 hour; keeps the cache warm through coffee-break-length interruptions without re-paying cache write costs",
+      "actionable": true,
+      "evidence": "\"On an API key, Bedrock, Vertex, Foundry, or Claude Platform on AWS, you pay the per-token rates, so the TTL stays at the cheaper five minutes by default. To opt into the one-hour TTL, set ENABLE_PROMPT_CACHING_1H=1.\" — https://code.claude.com/docs/en/prompt-caching",
+      "area": "Prompt caching in Claude Code and the Anthropic API"
+    },
+    {
+      "name": "Force 5-minute cache TTL (override subscription default)",
+      "mechanism": "Sets FORCE_PROMPT_CACHING_5M=1 to force the cheaper 5-minute TTL even on subscription plans that default to 1h. Useful when debugging or to override a managed-settings ENABLE_PROMPT_CACHING_1H.",
+      "config_location": "Environment variable FORCE_PROMPT_CACHING_5M=1, set in shell environment or .claude/settings.json env block",
+      "saves": "Avoids paying the 2x cache write premium (1-hour TTL rate) when sessions are short and the 1h TTL would never be exercised",
+      "actionable": true,
+      "evidence": "\"Set FORCE_PROMPT_CACHING_5M=1 to force the five-minute TTL regardless of authentication. This is useful when you're debugging cache behavior, comparing the two TTLs, or overriding an ENABLE_PROMPT_CACHING_1H set in managed settings.\" — https://code.claude.com/docs/en/prompt-caching",
+      "area": "Prompt caching in Claude Code and the Anthropic API"
+    },
+    {
+      "name": "Disable prompt caching per model for debugging",
+      "mechanism": "Per-model env vars (DISABLE_PROMPT_CACHING, DISABLE_PROMPT_CACHING_HAIKU, DISABLE_PROMPT_CACHING_SONNET, DISABLE_PROMPT_CACHING_OPUS, DISABLE_PROMPT_CACHING_FABLE) disable caching for targeted models. Primary use is debugging unexpected cache behaviour rather than cost reduction.",
+      "config_location": "Environment variables set in shell or .claude/settings.json env block; e.g. DISABLE_PROMPT_CACHING=1 disables for all models",
+      "saves": "Not a cost-saver — intended for diagnostic use only. Leaving caching enabled is the normal, cost-optimal state.",
+      "actionable": true,
+      "evidence": "\"Disabling caching is occasionally useful when debugging caching behavior with a specific model or provider.\" with table of DISABLE_PROMPT_CACHING / DISABLE_PROMPT_CACHING_HAIKU / etc. — https://code.claude.com/docs/en/prompt-caching",
+      "area": "Prompt caching in Claude Code and the Anthropic API"
+    },
+    {
+      "name": "Explicit cache_control breakpoints on static content blocks",
+      "mechanism": "Add cache_control: {type: 'ephemeral'} to the last static block in the system prompt and/or messages. The API caches all content up to that breakpoint and replays it at 0.1x base cost on subsequent requests. Up to 4 explicit breakpoints per request. For 1h TTL, add ttl: '1h' inside cache_control.",
+      "config_location": "API request body — cache_control field on system content blocks or messages content blocks; e.g. {\"type\": \"text\", \"text\": \"...\", \"cache_control\": {\"type\": \"ephemeral\"}} or {\"type\": \"ephemeral\", \"ttl\": \"1h\"}",
+      "saves": "Cache reads billed at 10% of standard input token price (0.1x multiplier). A single cache hit on a 10k-token system prompt saves 90% of that prefix's cost; break-even vs 5m write is 1 hit; break-even vs 1h write is ~2 hits.",
+      "actionable": true,
+      "evidence": "Pricing table: \"5-minute cache writes: 1.25x base input price; 1-hour cache writes: 2.0x base input price; Cache reads/refreshes: 0.1x base input price\" and breakpoint syntax — https://platform.claude.com/docs/en/docs/build-with-claude/prompt-caching",
+      "area": "Prompt caching in Claude Code and the Anthropic API"
+    },
+    {
+      "name": "Automatic (top-level) caching via single cache_control on request",
+      "mechanism": "Place a single cache_control field at the top level of the request object (not inside a specific block). Claude API, Claude Platform on AWS, and Microsoft Foundry automatically cache the entire prefix. Not supported on Bedrock or Vertex AI — those require explicit block-level breakpoints.",
+      "config_location": "API request body top-level field: {\"cache_control\": {\"type\": \"ephemeral\"}} or with TTL: {\"cache_control\": {\"type\": \"ephemeral\", \"ttl\": \"1h\"}}",
+      "saves": "Same 90% read-cost saving as explicit breakpoints, with zero per-block annotation overhead. Only available on Claude API and select platforms.",
+      "actionable": true,
+      "evidence": "\"Automatic caching is available on the Claude API, Claude Platform on AWS, and Microsoft Foundry (beta). Bedrock and Vertex AI do not support automatic caching.\" — https://platform.claude.com/docs/en/docs/build-with-claude/prompt-caching",
+      "area": "Prompt caching in Claude Code and the Anthropic API"
+    },
+    {
+      "name": "Place cache breakpoints on static prefix, never on dynamic content",
+      "mechanism": "The cache key is an exact prefix hash. Any token that changes between requests (timestamps, user IDs, per-request data) must appear AFTER the last cache breakpoint. Static system prompt and tool definitions should be at the front, marked with cache_control; dynamic user message appended after. Common mistake: marking a block that contains a timestamp, which produces a unique hash on every request and a permanent cache miss.",
+      "config_location": "API request body structure — ordering of content blocks in system array and messages array",
+      "saves": "Prevents paying 1.25x or 2x cache write cost on every request with zero reads, which would be worse than no caching. Correct placement enables consistent 0.1x read cost on all subsequent requests.",
+      "actionable": true,
+      "evidence": "\"Place cache_control on the last block whose prefix is identical across requests.\" and \"This fails because the timestamp changes on each request, making the prefix hash different every time.\" — https://platform.claude.com/docs/en/docs/build-with-claude/prompt-caching",
+      "area": "Prompt caching in Claude Code and the Anthropic API"
+    },
+    {
+      "name": "Pre-warm cache with max_tokens=0 request",
+      "mechanism": "Send a request with max_tokens=0 before actual user traffic begins. This writes the system prompt and tool definitions to cache and returns immediately with empty content and stop_reason: 'max_tokens'. Subsequent real requests then hit the cache on the first user turn. Incurs cache write charge but zero output tokens.",
+      "config_location": "API request body parameter: max_tokens=0 combined with cache_control on system blocks. Cannot be used with stream:true, extended thinking, structured outputs, or tool_choice: 'tool'/'any'.",
+      "saves": "Ensures the first real user request gets a cache hit instead of paying full input token price to write and process the prefix simultaneously. Critical for high-traffic applications launching simultaneously.",
+      "actionable": true,
+      "evidence": "\"Use max_tokens: 0 to load content into cache before user requests... Incurs cache write charge (check cache_creation_input_tokens). Zero output tokens billed.\" — https://platform.claude.com/docs/en/docs/build-with-claude/prompt-caching",
+      "area": "Prompt caching in Claude Code and the Anthropic API"
+    },
+    {
+      "name": "Keep model and effort level fixed for the session duration",
+      "mechanism": "Each model and each effort level has its own separate cache namespace. Switching /model or /effort mid-session causes the next request to reprocess the entire conversation history with zero cache hits, even if the content is identical. Pick model and effort at session start and hold them.",
+      "config_location": "Claude Code: set default model in /config or settings.json key 'model'; set effort in /effort or settings.json key 'effort'. Avoid the opusplan model setting if cache-efficiency is critical, since it switches between Opus and Sonnet on every plan-mode toggle.",
+      "saves": "Avoids a full uncached turn that can cost as much as the entire prior conversation compressed into one request; each such miss is billed at full 1x input rates instead of 0.1x.",
+      "actionable": true,
+      "evidence": "\"Each model has its own cache. Switching with /model means the next request reads the entire conversation history with no cache hits... The cache is keyed by effort level as well as model, so switching with /effort means the next request reads the entire conversation history with no cache hits.\" — https://code.claude.com/docs/en/prompt-caching",
+      "area": "Prompt caching in Claude Code and the Anthropic API"
+    },
+    {
+      "name": "Run /compact at natural task boundaries, not mid-task",
+      "mechanism": "Compaction replaces message history with a summary, invalidating the conversation cache layer. The compaction summarisation call itself reads the existing cache cheaply (it shares the prefix), but the first turn after compaction must rebuild the conversation cache from scratch. Running /compact between tasks rather than during one avoids paying this rebuild cost at a moment where the context being discarded is still actively needed.",
+      "config_location": "Claude Code interactive command: /compact [focus hint], e.g. /compact Focus on code changes and test output. Compaction instructions can also be set in CLAUDE.md under a '# Compact instructions' heading.",
+      "saves": "Prevents wasted cache rebuild work mid-task; the post-compaction conversation is shorter and its cache rebuild is proportionally cheaper. Also reduces all subsequent per-turn input costs because the context window is smaller.",
+      "actionable": true,
+      "evidence": "\"To choose when its overhead happens, run /compact at a natural break in your work, such as between tasks, instead of waiting for auto-compaction to trigger mid-task.\" — https://code.claude.com/docs/en/prompt-caching",
+      "area": "Prompt caching in Claude Code and the Anthropic API"
+    },
+    {
+      "name": "Use /rewind instead of /compact to abandon a failed path",
+      "mechanism": "/rewind truncates the conversation back to an earlier turn. The remaining history is identical to what the cache was built from at that turn, so the next request reads the earlier cache entry (which was kept warm by subsequent turns that passed through it). No cache rebuild occurs, unlike /compact.",
+      "config_location": "Claude Code interactive command: /rewind or double-tap Escape to restore to a previous checkpoint",
+      "saves": "Avoids both the compaction overhead AND a full cache rebuild; restores a cheaply-cached prefix rather than creating a new, uncached one.",
+      "actionable": true,
+      "evidence": "\"Rewinding truncates back to a prefix that is already cached, rather than building a new one as compaction does.\" and \"/rewind... the next request hits the earlier cache entry. Every turn since then has read through that prefix, which kept the entry warm.\" — https://code.claude.com/docs/en/prompt-caching",
+      "area": "Prompt caching in Claude Code and the Anthropic API"
+    },
+    {
+      "name": "Keep MCP tool definitions deferred (do not use alwaysLoad)",
+      "mechanism": "By default on supported models, MCP tool definitions are deferred — only tool names enter the system prompt prefix; full definitions load only when Claude uses a specific tool. This means connecting, disconnecting, or updating an MCP server mid-session does NOT invalidate the cached prefix. Marking a server or tool as alwaysLoad or disabling tool search forces definitions into the prefix, so any MCP change causes a full cache miss.",
+      "config_location": "Claude Code MCP server configuration — avoid setting alwaysLoad: true in MCP server config; do not set ANTHROPIC_BASE_URL to a gateway that disables tool search; tool search is unavailable on Haiku models and Vertex AI by default.",
+      "saves": "Prevents expensive full-context cache misses triggered by MCP server reconnects, dynamic tool updates, or server config changes that would otherwise cost a full uncached turn.",
+      "actionable": true,
+      "evidence": "\"Deferred tools, the default on supported models: a server connecting, disconnecting, or changing its tool list only appends new content and doesn't disturb anything already cached.\" — https://code.claude.com/docs/en/prompt-caching",
+      "area": "Prompt caching in Claude Code and the Anthropic API"
+    },
+    {
+      "name": "Apply Claude Code upgrades at session start, not mid-session",
+      "mechanism": "A new Claude Code version updates the system prompt or tool definitions, invalidating the entire cache. Auto-update downloads versions in the background but applies on next launch. Setting DISABLE_AUTOUPDATER=1 lets you control exactly when upgrades apply so they do not land during an active long session.",
+      "config_location": "Environment variable DISABLE_AUTOUPDATER=1 (set in shell profile or .claude/settings.json env block)",
+      "saves": "Prevents a surprise full-cache-rebuild turn mid-session caused by a silent background upgrade taking effect. Especially important before resuming long sessions with /resume after a Claude Code update.",
+      "actionable": true,
+      "evidence": "\"Auto-update downloads new versions in the background but applies them on the next launch, never mid-session... Resuming a session after an upgrade reprocesses the entire conversation history with no cache hits, since the history now sits behind a different system prompt.\" — https://code.claude.com/docs/en/prompt-caching",
+      "area": "Prompt caching in Claude Code and the Anthropic API"
+    },
+    {
+      "name": "Suppress per-machine system prompt sections for fleet/Agent SDK use",
+      "mechanism": "Claude Code's system prompt embeds working directory, platform, shell, OS version, and auto-memory paths, making the prefix unique per machine. Agent SDK callers can suppress these per-machine sections so all fleet instances share the same prefix and therefore share the same cache entry. See Agent SDK docs for modifying system prompts.",
+      "config_location": "Agent SDK configuration — see https://code.claude.com/docs/en/agent-sdk/modifying-system-prompts for the suppress-machine-info option",
+      "saves": "Converts per-machine cache misses into cross-machine cache hits for automated fleets; instead of N machines each paying 1.25x for a cache write of the same prefix, all N share one write and pay 0.1x on reads.",
+      "actionable": true,
+      "evidence": "\"For Agent SDK callers running fleets of automated processes, see improve prompt caching across users and machines to suppress the per-machine sections of the system prompt and share the cache across machines.\" — https://code.claude.com/docs/en/prompt-caching",
+      "area": "Prompt caching in Claude Code and the Anthropic API"
+    },
+    {
+      "name": "Monitor cache performance via statusline current_usage fields",
+      "mechanism": "Claude Code exposes cache_creation_input_tokens and cache_read_input_tokens in the current_usage object readable by statusline scripts. A high read-to-creation ratio confirms caching is working. If creation stays high turn after turn, a prefix-invalidating action is occurring and can be diagnosed against the known invalidation list.",
+      "config_location": "Claude Code statusline script — read current_usage.cache_creation_input_tokens and current_usage.cache_read_input_tokens; configure via /config statusline or see https://code.claude.com/docs/en/statusline",
+      "saves": "Not a direct cost saving, but enables detection of cache regressions (e.g. unexpected model switch, MCP reconnect) before they accumulate significant cost over a long session.",
+      "actionable": true,
+      "evidence": "\"A high read-to-creation ratio means caching is working well. If creation stays high turn after turn, something is changing in your prefix.\" — https://code.claude.com/docs/en/prompt-caching",
+      "area": "Prompt caching in Claude Code and the Anthropic API"
+    },
+    {
+      "name": "Subagent model selection: use Sonnet with 5-minute TTL awareness",
+      "mechanism": "Subagents start with their own cache namespace (no parent cache inheritance) and always use the 5-minute TTL even on subscription plans. Short-lived subagents rarely get a second cache hit within the TTL window, so paying 1.25x for a cache write that yields zero reads is worse than no caching. For costly multi-turn subagent tasks, keep the subagent alive long enough across turns to amortise the cache write.",
+      "config_location": "Subagent configuration: set model: haiku for simple tasks (lowest base price), model: sonnet for general tasks. See subagent spec in .claude/agents/*.md or inline subagent definition.",
+      "saves": "Avoids paying 1.25x cache write on a subagent that exits after one turn and never reads from cache; choose cheap models to reduce base input cost when caching won't help.",
+      "actionable": true,
+      "evidence": "\"Subagents use the five-minute TTL even on a subscription, since the automatic one-hour TTL applies to the main conversation.\" and costs page: \"Use Sonnet for teammates. It balances capability and cost for coordination tasks.\" — https://code.claude.com/docs/en/prompt-caching, https://code.claude.com/docs/en/costs",
+      "area": "Prompt caching in Claude Code and the Anthropic API"
+    },
+    {
+      "name": "PreToolUse hook — block destructive Bash commands",
+      "mechanism": "Fires before a tool call executes and can block it entirely. A script that exits with code 2 cancels the tool call; stderr is fed back to Claude as feedback so it can adjust without looping. Prevents expensive recoveries from destructive operations (e.g., `rm -rf`, `DROP TABLE`).",
+      "config_location": ".claude/settings.json under hooks.PreToolUse with matcher 'Bash'; hook script exits 2 to block, writes reason to stderr",
+      "saves": "Eliminates token waste from destructive operations that would require expensive recovery turns; prevents Claude from blindly retrying after blocked calls by receiving clear feedback",
+      "actionable": true,
+      "evidence": "\"Exit 2: the action is blocked. Write a reason to stderr, and Claude receives it as feedback so it can adjust.\" — https://code.claude.com/docs/en/hooks-guide",
+      "area": "Claude Code hooks — preventing wasted/looping work, auto-formatting, and blocking expensive operations"
+    },
+    {
+      "name": "PreToolUse hook — block edits to protected files",
+      "mechanism": "A PreToolUse hook with matcher 'Edit|Write' checks the target file path against protected patterns (.env, package-lock.json, .git/) and exits 2 to block. Claude receives the stderr reason and adjusts its approach rather than wasting a turn on a doomed write.",
+      "config_location": ".claude/settings.json under hooks.PreToolUse with matcher 'Edit|Write'; reference script at .claude/hooks/protect-files.sh",
+      "saves": "Prevents token-consuming edit attempts that would be denied anyway, and avoids follow-on correction turns",
+      "actionable": true,
+      "evidence": "\"Prevent Claude from modifying sensitive files like .env, package-lock.json, or anything in .git/. Claude receives feedback explaining why the edit was blocked, so it can adjust its approach.\" — https://code.claude.com/docs/en/hooks-guide",
+      "area": "Claude Code hooks — preventing wasted/looping work, auto-formatting, and blocking expensive operations"
+    },
+    {
+      "name": "PostToolUse hook — auto-format code after edits (Prettier)",
+      "mechanism": "Runs Prettier (or any formatter) deterministically on every file Claude writes/edits. Because formatting is guaranteed by the hook, Claude never needs to re-read, re-check, or re-attempt formatting in a follow-up turn, eliminating a common source of extra round-trips.",
+      "config_location": ".claude/settings.json under hooks.PostToolUse with matcher 'Edit|Write'; command: \"jq -r '.tool_input.file_path' | xargs npx prettier --write\"",
+      "saves": "Eliminates follow-up turns where Claude reads the file back, detects bad formatting, and re-edits; removes the need to prompt Claude to format",
+      "actionable": true,
+      "evidence": "\"Automatically run Prettier on every file Claude edits, so formatting stays consistent without manual intervention.\" — https://code.claude.com/docs/en/hooks-guide",
+      "area": "Claude Code hooks — preventing wasted/looping work, auto-formatting, and blocking expensive operations"
+    },
+    {
+      "name": "SessionStart hook with 'compact' matcher — re-inject context after compaction",
+      "mechanism": "Fires when a session resumes after auto-compaction. Any text written to stdout is injected into Claude's context. Re-supplying critical project facts (conventions, current sprint, tool preferences) after compaction prevents Claude from making wrong assumptions that lead to wasted correction turns.",
+      "config_location": ".claude/settings.json under hooks.SessionStart with matcher 'compact'; command: any shell command writing reminders to stdout",
+      "saves": "Avoids wasted turns caused by Claude forgetting project conventions after context compaction, which would otherwise require the user to re-state them or Claude to re-discover them via tool calls",
+      "actionable": true,
+      "evidence": "\"When Claude's context window fills up, compaction summarizes the conversation to free space. This can lose important details. Use a SessionStart hook with a compact matcher to re-inject critical context after every compaction.\" — https://code.claude.com/docs/en/hooks-guide",
+      "area": "Claude Code hooks — preventing wasted/looping work, auto-formatting, and blocking expensive operations"
+    },
+    {
+      "name": "Stop hook (prompt type) — verify task completion before allowing Claude to stop",
+      "mechanism": "A prompt-based Stop hook calls a Claude model (Haiku by default) to evaluate whether all requested tasks are actually complete. If the model returns {\"ok\": false, \"reason\": \"...\"}, Claude keeps working using the reason as its next instruction. Prevents premature stopping that would require the user to re-prompt.",
+      "config_location": ".claude/settings.json under hooks.Stop with type 'prompt'; model defaults to Haiku but can be overridden with the 'model' field",
+      "saves": "Prevents the user from having to re-prompt after Claude incorrectly declares completion; avoids a full new turn and context re-establishment",
+      "actionable": true,
+      "evidence": "\"This example uses a Stop hook to ask the model whether all requested tasks are complete. If the model returns 'ok: false', Claude keeps working and uses the reason as its next instruction.\" — https://code.claude.com/docs/en/hooks-guide",
+      "area": "Claude Code hooks — preventing wasted/looping work, auto-formatting, and blocking expensive operations"
+    },
+    {
+      "name": "Stop hook — cap at 8 blocks with stop_hook_active guard",
+      "mechanism": "Claude Code automatically overrides a Stop hook after it blocks 8 consecutive times without progress to prevent infinite looping. Hook scripts should check the 'stop_hook_active' field from JSON input and exit 0 when true, to avoid being forcibly overridden. The cap can be raised via CLAUDE_CODE_STOP_HOOK_BLOCK_CAP env var.",
+      "config_location": "Hook script reads .stop_hook_active from stdin JSON and exits 0 if true; env var CLAUDE_CODE_STOP_HOOK_BLOCK_CAP in shell environment or .env",
+      "saves": "Prevents runaway agentic loops where a Stop hook endlessly re-triggers Claude, consuming unbounded tokens",
+      "actionable": true,
+      "evidence": "\"Claude Code overrides a Stop hook after it blocks 8 times in a row without progress. Your hook script needs to check whether it already triggered a continuation. Parse the stop_hook_active field from the JSON input and exit early if it's true.\" — https://code.claude.com/docs/en/hooks-guide",
+      "area": "Claude Code hooks — preventing wasted/looping work, auto-formatting, and blocking expensive operations"
+    },
+    {
+      "name": "PermissionRequest hook — auto-approve known-safe permission prompts",
+      "mechanism": "Fires when Claude Code is about to show a permission dialog. Returning JSON with {\"hookSpecificOutput\": {\"hookEventName\": \"PermissionRequest\", \"decision\": {\"behavior\": \"allow\"}}} answers the dialog automatically. Eliminating unnecessary permission interrupts keeps the agentic loop running without idle time or user re-engagement costs.",
+      "config_location": ".claude/settings.json under hooks.PermissionRequest with a narrow matcher (e.g., 'ExitPlanMode'); hook command echoes the allow JSON to stdout",
+      "saves": "Eliminates idle wait time when Claude pauses for permissions the user would always grant; prevents the user from having to re-engage and re-explain context after a permission pause",
+      "actionable": true,
+      "evidence": "\"Skip the approval dialog for tool calls you always allow. This example auto-approves ExitPlanMode ... so you aren't prompted every time a plan is ready.\" — https://code.claude.com/docs/en/hooks-guide",
+      "area": "Claude Code hooks — preventing wasted/looping work, auto-formatting, and blocking expensive operations"
+    },
+    {
+      "name": "PreToolUse hook with 'if' field — fine-grained argument-level filtering",
+      "mechanism": "The 'if' field (requires Claude Code v2.1.85+) uses permission rule syntax (e.g., 'Bash(git *)') to filter at the individual argument level, so hook processes only spawn when the exact tool+argument pattern matches. Reduces unnecessary hook process overhead compared to spawning for every Bash call.",
+      "config_location": ".claude/settings.json under hooks.PreToolUse[].hooks[].if; example: \"if\": \"Bash(git *)\" to only spawn for git commands",
+      "saves": "Reduces hook process spawn overhead on high-frequency tool calls like Bash; avoids running expensive validation scripts on irrelevant commands",
+      "actionable": true,
+      "evidence": "\"The if field uses permission rule syntax to filter hooks by tool name and arguments together, so the hook process only spawns when the tool call matches. This goes beyond matcher, which filters at the group level by tool name only.\" — https://code.claude.com/docs/en/hooks-guide",
+      "area": "Claude Code hooks — preventing wasted/looping work, auto-formatting, and blocking expensive operations"
+    },
+    {
+      "name": "CwdChanged + SessionStart hooks with CLAUDE_ENV_FILE — reactive environment reload",
+      "mechanism": "SessionStart loads directory-specific env vars on launch; CwdChanged reloads them when Claude changes directory. Both write to CLAUDE_ENV_FILE, which Claude Code runs as a preamble before each Bash command. Prevents Claude from running commands with wrong env vars and then needing correction turns.",
+      "config_location": ".claude/settings.json under hooks.SessionStart and hooks.CwdChanged; both commands write to $CLAUDE_ENV_FILE env var",
+      "saves": "Prevents failed Bash commands and subsequent diagnosis/correction turns caused by missing or wrong environment variables after a directory change",
+      "actionable": true,
+      "evidence": "\"SessionStart loads the variables for the directory you launch in, and CwdChanged reloads them each time Claude changes directory. Both write to CLAUDE_ENV_FILE, which Claude Code runs as a script preamble before each Bash command.\" — https://code.claude.com/docs/en/hooks-guide",
+      "area": "Claude Code hooks — preventing wasted/looping work, auto-formatting, and blocking expensive operations"
+    },
+    {
+      "name": "PreToolUse hook — permissionDecision 'deny' with reason (structured JSON output)",
+      "mechanism": "Instead of a bare exit 2, a PreToolUse hook can exit 0 and print JSON with permissionDecision: 'deny' and a permissionDecisionReason. Claude receives the reason as tool error feedback and can adjust immediately (e.g., 'Use rg instead of grep'), avoiding a re-attempt with the wrong tool.",
+      "config_location": ".claude/settings.json under hooks.PreToolUse; hook stdout: {\"hookSpecificOutput\": {\"hookEventName\": \"PreToolUse\", \"permissionDecision\": \"deny\", \"permissionDecisionReason\": \"<reason>\"}}",
+      "saves": "Eliminates blind retry loops by giving Claude actionable feedback on exactly why a tool call was denied and what to do instead",
+      "actionable": true,
+      "evidence": "\"With 'deny', Claude Code cancels the tool call and feeds permissionDecisionReason back to Claude. Example: 'Use rg instead of grep for better performance'\" — https://code.claude.com/docs/en/hooks-guide",
+      "area": "Claude Code hooks — preventing wasted/looping work, auto-formatting, and blocking expensive operations"
+    },
+    {
+      "name": "PostToolBatch hook — validate parallel tool results before next model call",
+      "mechanism": "Fires after a full batch of parallel tool calls resolves, before the next model call. Can block the agentic loop (exit 2) if a critical prerequisite failed. Avoids Claude receiving partial results and continuing down an invalid path that requires backtracking.",
+      "config_location": ".claude/settings.json under hooks.PostToolBatch; no matcher support — fires on every batch",
+      "saves": "Prevents wasted model calls when a batch had a critical failure; stops Claude from reasoning over invalid intermediate state and producing work that must be discarded",
+      "actionable": true,
+      "evidence": "\"PostToolBatch: After a full batch of parallel tool calls resolves, before the next model call\" and exit code 2 behavior: \"Stops agentic loop\" — https://code.claude.com/docs/en/hooks",
+      "area": "Claude Code hooks — preventing wasted/looping work, auto-formatting, and blocking expensive operations"
+    },
+    {
+      "name": "StopFailure hook — handle rate_limit and overloaded errors",
+      "mechanism": "Fires when a turn ends due to an API error. The matcher field supports specific error type values: rate_limit, overloaded, billing_error, max_output_tokens, server_error, etc. Can trigger backoff logic, notifications, or logging to prevent wasted retry attempts.",
+      "config_location": ".claude/settings.json under hooks.StopFailure with matcher set to 'rate_limit|overloaded' (or other error codes)",
+      "saves": "Enables structured backoff and notification instead of blind retries; prevents billing_error surprises from going unlogged",
+      "actionable": true,
+      "evidence": "\"StopFailure: When the turn ends due to an API error.\" Matcher values include: rate_limit, overloaded, authentication_failed, billing_error, invalid_request, max_output_tokens, server_error, unknown — https://code.claude.com/docs/en/hooks",
+      "area": "Claude Code hooks — preventing wasted/looping work, auto-formatting, and blocking expensive operations"
+    },
+    {
+      "name": "UserPromptSubmit hook — validate or enrich prompts before Claude processes them",
+      "mechanism": "Fires when the user submits a prompt, before Claude processes it. Can block the prompt (exit 2) or inject additional context (stdout text is added to Claude's context). Blocking vague or problematic prompts early avoids spending a full model turn on a prompt that would need clarification or refusal.",
+      "config_location": ".claude/settings.json under hooks.UserPromptSubmit; exit 2 blocks prompt, stdout text is added as context",
+      "saves": "Prevents token spend on prompts that are too vague, prohibited, or missing required context; avoids a back-and-forth clarification round-trip",
+      "actionable": true,
+      "evidence": "\"UserPromptSubmit: When you submit a prompt, before Claude processes it\" — exit 2 behavior is 'Blocks prompt processing' — https://code.claude.com/docs/en/hooks",
+      "area": "Claude Code hooks — preventing wasted/looping work, auto-formatting, and blocking expensive operations"
+    },
+    {
+      "name": "disableAllHooks setting — globally disable all hooks without deleting config",
+      "mechanism": "Setting disableAllHooks: true in a settings file prevents all hooks from running. Managed policy hooks still run unless the same key is set in managed settings. Useful for debugging or temporarily disabling hook overhead.",
+      "config_location": ".claude/settings.json or ~/.claude/settings.json: top-level key \"disableAllHooks\": true",
+      "saves": "Useful for diagnosing whether hooks are causing unexpected loops, latency, or blocking; quick toggle without deleting hook configurations",
+      "actionable": true,
+      "evidence": "\"To disable hooks, set 'disableAllHooks': true in your settings file. Hooks configured in managed settings still run unless disableAllHooks is also set there.\" — https://code.claude.com/docs/en/hooks-guide",
+      "area": "Claude Code hooks — preventing wasted/looping work, auto-formatting, and blocking expensive operations"
+    },
+    {
+      "name": "ConfigChange hook — block or audit unauthorized configuration changes",
+      "mechanism": "Fires when a configuration file changes during a session. Can exit 2 or return {\"decision\": \"block\"} to prevent the change from taking effect. Matcher values: user_settings, project_settings, local_settings, policy_settings, skills. Prevents rogue settings changes that could alter model, permissions, or hooks mid-session.",
+      "config_location": ".claude/settings.json or ~/.claude/settings.json under hooks.ConfigChange; matcher filters by config source type",
+      "saves": "Prevents mid-session configuration drift that could silently change model, permissions, or hooks — which would waste tokens on work done under wrong settings",
+      "actionable": true,
+      "evidence": "\"The ConfigChange event fires when an external process or editor modifies a configuration file ... To block a change from taking effect, exit with code 2 or return {'decision': 'block'}.\" — https://code.claude.com/docs/en/hooks-guide",
+      "area": "Claude Code hooks — preventing wasted/looping work, auto-formatting, and blocking expensive operations"
+    },
+    {
+      "name": "MCP Tool Search (deferred tool loading)",
+      "mechanism": "Tool schemas are NOT loaded into context at session start. Only tool names and server instructions load upfront. Claude uses a ToolSearch call to discover and load only the schemas it actually needs for the current task. This avoids the ~55K+ token overhead of loading all tools from multiple MCP servers before any conversation begins.",
+      "config_location": "ENABLE_TOOL_SEARCH env var (set in shell or in .claude/settings.json under the 'env' key). Default (unset) = all MCP tools deferred. Set 'true' to force deferral even on Vertex AI / proxies. Set 'auto' for threshold mode (defer if tools exceed 10% of context window). Set 'auto:N' for custom % threshold (e.g., ENABLE_TOOL_SEARCH=auto:5). Set 'false' to disable and load all upfront.",
+      "saves": "Eliminates the upfront token cost of unused MCP tool schemas. A five-server setup (GitHub 35 tools ~26K tokens, Slack 11 tools ~21K tokens, etc.) consumed ~55K tokens before any conversation; with tool search this drops to near zero for unused schemas. Engineering blog reports 85% reduction in context token usage (191,300 tokens preserved vs. 122,800 with traditional upfront loading).",
+      "actionable": true,
+      "evidence": "\"Tool search keeps MCP context usage low by deferring tool definitions until Claude needs them. Only tool names and server instructions load at session start, so adding more MCP servers has minimal impact on your context window.\" — code.claude.com/docs/en/mcp. Numbers: \"approximately 55K tokens before the conversation even starts\" for 5-server setup — anthropic.com/engineering/advanced-tool-use",
+      "area": "Claude Code MCP servers and tool definitions — token overhead reduction"
+    },
+    {
+      "name": "alwaysLoad per-server flag (exempt specific servers from deferral)",
+      "mechanism": "By default with tool search enabled, all MCP servers are deferred. Setting alwaysLoad: true on a server forces its tools to load into context at session start. This is the inverse lever — use it only for a small number of tools Claude needs on every turn, as each upfront tool consumes context. All other servers remain deferred.",
+      "config_location": ".mcp.json (project root) or ~/.claude.json (user scope) — add 'alwaysLoad': true to the server's config object. Example: {\"mcpServers\": {\"core-tools\": {\"type\": \"http\", \"url\": \"https://mcp.example.com/mcp\", \"alwaysLoad\": true}}}. Requires Claude Code v2.1.121+.",
+      "saves": "Lets you opt-in only the handful of truly always-needed tools, leaving everything else deferred. Prevents per-turn ToolSearch overhead for tools that would otherwise be searched every time.",
+      "actionable": true,
+      "evidence": "\"If a server's tools should always be visible to Claude without a search step, set alwaysLoad to true... Use this for a small number of tools that Claude needs on every turn, since each upfront tool consumes context that would otherwise be available for your conversation.\" — code.claude.com/docs/en/mcp",
+      "area": "Claude Code MCP servers and tool definitions — token overhead reduction"
+    },
+    {
+      "name": "anthropic/alwaysLoad per-tool meta annotation",
+      "mechanism": "An MCP server author can mark individual tools (not the whole server) as always-loaded by including '\"anthropic/alwaysLoad\": true' in the tool's _meta object in the tools/list response. This loads only that specific tool upfront while keeping the rest of the server's tools deferred.",
+      "config_location": "Set server-side in the MCP server's tools/list response: {\"name\": \"my_tool\", \"_meta\": {\"anthropic/alwaysLoad\": true}}. No client-side config file change needed.",
+      "saves": "Fine-grained control: single high-frequency tools get upfront context access without loading the entire server's schema set.",
+      "actionable": true,
+      "evidence": "\"An MCP server can also mark individual tools as always-loaded by including 'anthropic/alwaysLoad': true in the tool's _meta object, which has the same effect for that tool only.\" — code.claude.com/docs/en/mcp",
+      "area": "Claude Code MCP servers and tool definitions — token overhead reduction"
+    },
+    {
+      "name": "MAX_MCP_OUTPUT_TOKENS — limit MCP tool output size",
+      "mechanism": "MCP tool responses can be arbitrarily large and consume context tokens. Claude Code warns at 10,000-token output and truncates at 25,000 tokens by default. Lowering MAX_MCP_OUTPUT_TOKENS caps how many tokens any single MCP tool response can occupy in context. Large outputs exceeding the threshold are persisted to disk and replaced with a file reference.",
+      "config_location": "Environment variable MAX_MCP_OUTPUT_TOKENS (default: 25000). Set in shell: export MAX_MCP_OUTPUT_TOKENS=10000 or in .claude/settings.json under the 'env' key: {\"env\": {\"MAX_MCP_OUTPUT_TOKENS\": \"10000\"}}. Warning threshold is fixed at 10,000 tokens.",
+      "saves": "Prevents runaway context consumption from MCP servers that return large datasets, logs, or reports. Each token over the cap is truncated, keeping context available for the actual task.",
+      "actionable": true,
+      "evidence": "\"Claude Code displays a warning when any MCP tool output exceeds 10,000 tokens... Default limit: 25,000 tokens... To increase the limit: export MAX_MCP_OUTPUT_TOKENS=50000\" — code.claude.com/docs/en/mcp (same mechanism applies to lowering the limit)",
+      "area": "Claude Code MCP servers and tool definitions — token overhead reduction"
+    },
+    {
+      "name": "anthropic/maxResultSizeChars per-tool annotation (server-side)",
+      "mechanism": "MCP server authors can annotate individual tools with a maximum result size in characters via _meta[\"anthropic/maxResultSizeChars\"]. Claude Code raises (or lowers) that tool's truncation threshold to the annotated value, up to a hard ceiling of 500,000 characters. Results exceeding this for text are persisted to disk and replaced with a file reference, keeping them out of the live context.",
+      "config_location": "Set server-side in tools/list response: {\"name\": \"get_schema\", \"_meta\": {\"anthropic/maxResultSizeChars\": 200000}}. No client configuration required; takes precedence over MAX_MCP_OUTPUT_TOKENS for text content.",
+      "saves": "Prevents specific high-output tools (e.g., schema dumps, file trees) from blowing up context without requiring users to globally raise MAX_MCP_OUTPUT_TOKENS.",
+      "actionable": true,
+      "evidence": "\"Claude Code raises that tool's threshold to the annotated value, up to a hard ceiling of 500,000 characters... Without the annotation, results that exceed the default threshold are persisted to disk and replaced with a file reference\" — code.claude.com/docs/en/mcp",
+      "area": "Claude Code MCP servers and tool definitions — token overhead reduction"
+    },
+    {
+      "name": "disableClaudeAiConnectors — disable cloud connectors entirely",
+      "mechanism": "Claude.ai connectors (provisioned from your claude.ai account, e.g., Microsoft 365, Gmail, Slack, etc.) are loaded automatically when authenticated via Claude.ai subscription. Each connector adds tool schemas to context. Setting disableClaudeAiConnectors: true prevents all of these from loading.",
+      "config_location": ".claude/settings.json (project level): {\"disableClaudeAiConnectors\": true}. Or env var: ENABLE_CLAUDEAI_MCP_SERVERS=false. Also settable at user scope in ~/.claude/settings.json. Uses any-source-true semantics: true in ANY settings source wins.",
+      "saves": "Eliminates all context tokens from cloud connector tool schemas for projects that don't need them. Particularly useful for isolated or security-sensitive projects.",
+      "actionable": true,
+      "evidence": "\"To disable claude.ai MCP servers in Claude Code, set disableClaudeAiConnectors to true in any settings scope... You can also set the ENABLE_CLAUDEAI_MCP_SERVERS environment variable to false\" — code.claude.com/docs/en/mcp",
+      "area": "Claude Code MCP servers and tool definitions — token overhead reduction"
+    },
+    {
+      "name": "deniedMcpServers — block specific MCP servers by name or URL",
+      "mechanism": "Instead of disabling all connectors, you can block individual MCP servers by name or URL pattern using deniedMcpServers. Blocked servers do not connect and their tool schemas never enter context.",
+      "config_location": "Managed settings file (managed-settings.json in system directory: /Library/Application Support/ClaudeCode/ on macOS, /etc/claude-code/ on Linux, C:\\Program Files\\ClaudeCode\\ on Windows) or .claude/settings.json. Key: 'deniedMcpServers'. Example: {\"deniedMcpServers\": [{\"serverName\": \"claude.ai Slack\"}]}.",
+      "saves": "Surgically removes token overhead from specific unused servers without affecting other connectors.",
+      "actionable": true,
+      "evidence": "\"To block individual claude.ai connectors instead of all of them, add them to deniedMcpServers by name or by URL pattern.\" — code.claude.com/docs/en/mcp",
+      "area": "Claude Code MCP servers and tool definitions — token overhead reduction"
+    },
+    {
+      "name": "Remove unused MCP servers via claude mcp remove",
+      "mechanism": "Any MCP server that is configured but not needed for a project will connect at session start and potentially load tool schemas into context (if alwaysLoad or ENABLE_TOOL_SEARCH=false). Removing unused servers via 'claude mcp remove <name>' prevents any connection overhead and eliminates the server's instruction text from context.",
+      "config_location": "CLI command: 'claude mcp remove <server-name>'. For project-scoped servers, remove the entry from .mcp.json. For user-scoped servers, remove from ~/.claude.json. Check current servers with 'claude mcp list'.",
+      "saves": "Server instructions still load at session start even with tool search enabled (only schemas are deferred, not server instruction text). Removing truly unused servers eliminates even this startup cost.",
+      "actionable": true,
+      "evidence": "\"Only tool names and server instructions load at session start\" — code.claude.com/docs/en/mcp. 'claude mcp remove github' is the documented command for removal.",
+      "area": "Claude Code MCP servers and tool definitions — token overhead reduction"
+    },
+    {
+      "name": "ENABLE_TOOL_SEARCH=auto:N threshold mode",
+      "mechanism": "Instead of full deferral or full upfront loading, 'auto' mode loads MCP tool schemas upfront only if they fit within N% of the context window (default 10% with 'auto', custom % with 'auto:N'). Tools that would exceed the threshold are deferred. This is a middle ground that avoids ToolSearch round-trips for small schema sets while deferring large ones.",
+      "config_location": "ENABLE_TOOL_SEARCH=auto (10% threshold) or ENABLE_TOOL_SEARCH=auto:5 (5% threshold) or ENABLE_TOOL_SEARCH=auto:N for any N from 0-100. Set in shell or in .claude/settings.json under 'env': {\"env\": {\"ENABLE_TOOL_SEARCH\": \"auto:5\"}}.",
+      "saves": "Balances context savings (defer large schema sets) with latency savings (avoid ToolSearch round-trips for small sets). Tuning N lower forces more deferral and keeps more context free.",
+      "actionable": true,
+      "evidence": "\"If you prefer threshold-based loading, set ENABLE_TOOL_SEARCH=auto to load schemas upfront when they fit within 10% of the context window and defer only the overflow... auto:N — Threshold mode with a custom percentage, where N is 0-100\" — code.claude.com/docs/en/mcp",
+      "area": "Claude Code MCP servers and tool definitions — token overhead reduction"
+    },
+    {
+      "name": "Keep CLAUDE.md under 200 lines",
+      "mechanism": "CLAUDE.md is loaded into the context window at session start on every turn. Files over 200 lines consume more context tokens and empirically reduce Claude's adherence to the instructions — rules get 'lost in the noise'. Keeping under 200 lines reduces per-session input tokens.",
+      "config_location": "./CLAUDE.md or ./.claude/CLAUDE.md — edit by hand or via /memory command",
+      "saves": "Reduces per-session input token baseline; improves instruction adherence so fewer correction turns are needed",
+      "actionable": true,
+      "evidence": "\"target under 200 lines per CLAUDE.md file. Longer files consume more context and reduce adherence.\" — https://code.claude.com/docs/en/memory",
+      "area": "Claude Code CLAUDE.md and output styles — keeping CLAUDE.md small, output styles, and what bloats every-turn context"
+    },
+    {
+      "name": "Move workflow/task-specific instructions from CLAUDE.md to skills",
+      "mechanism": "CLAUDE.md is injected on every turn. Skills load on-demand when invoked or when Claude determines they are relevant. Moving specialized workflows (PR reviews, database migrations, etc.) into .claude/skills/<name>/SKILL.md means those tokens are only present when needed, not on every message.",
+      "config_location": ".claude/skills/<name>/SKILL.md — create directory and SKILL.md file; invoke with /<skill-name>",
+      "saves": "Eliminates context tokens for specialized instructions on every unrelated turn",
+      "actionable": true,
+      "evidence": "\"If it contains detailed instructions for specific workflows (like PR reviews or database migrations), those tokens are present even when you're doing unrelated work. Skills load on-demand only when invoked, so moving specialized instructions into skills keeps your base context smaller.\" — https://code.claude.com/docs/en/costs",
+      "area": "Claude Code CLAUDE.md and output styles — keeping CLAUDE.md small, output styles, and what bloats every-turn context"
+    },
+    {
+      "name": "Use path-scoped rules in .claude/rules/ instead of CLAUDE.md",
+      "mechanism": "Rules in .claude/rules/ with YAML `paths:` frontmatter only load into context when Claude reads files matching the glob pattern, not on every turn. Rules without paths load at launch like CLAUDE.md, but rules with paths are conditional — saving tokens on turns that don't touch those files.",
+      "config_location": ".claude/rules/<topic>.md — add YAML frontmatter with `paths: ['src/api/**/*.ts']` to scope loading",
+      "saves": "Eliminates context tokens for file-type-specific rules on every turn that does not involve matching files",
+      "actionable": true,
+      "evidence": "\"Rules can be scoped to specific files using YAML frontmatter with the `paths` field. These conditional rules only apply when Claude is working with files matching the specified patterns.\" — https://code.claude.com/docs/en/memory",
+      "area": "Claude Code CLAUDE.md and output styles — keeping CLAUDE.md small, output styles, and what bloats every-turn context"
+    },
+    {
+      "name": "Use HTML comments in CLAUDE.md for maintainer notes",
+      "mechanism": "Block-level HTML comments (<!-- ... -->) in CLAUDE.md files are stripped before the content is injected into Claude's context window. This lets you leave notes for human maintainers without spending any context tokens on them.",
+      "config_location": "./CLAUDE.md — wrap maintainer notes in <!-- --> blocks",
+      "saves": "Removes documentation/commentary tokens from context while keeping the file human-readable",
+      "actionable": true,
+      "evidence": "\"Block-level HTML comments (<!-- maintainer notes -->) in CLAUDE.md files are stripped before the content is injected into Claude's context. Use them to leave notes for human maintainers without spending context tokens on them.\" — https://code.claude.com/docs/en/memory",
+      "area": "Claude Code CLAUDE.md and output styles — keeping CLAUDE.md small, output styles, and what bloats every-turn context"
+    },
+    {
+      "name": "Use claudeMdExcludes to skip irrelevant ancestor CLAUDE.md files",
+      "mechanism": "In a monorepo, CLAUDE.md files from all ancestor directories and other teams are concatenated into context at launch. The claudeMdExcludes setting skips specific files by glob path, removing irrelevant instructions from context.",
+      "config_location": ".claude/settings.local.json — set key `claudeMdExcludes` to an array of glob patterns matching absolute file paths",
+      "saves": "Eliminates tokens from CLAUDE.md files for other teams or unrelated workstreams in large repos",
+      "actionable": true,
+      "evidence": "\"The claudeMdExcludes setting lets you skip specific files by path or glob pattern... Add it to .claude/settings.local.json so the exclusion stays local to your machine.\" — https://code.claude.com/docs/en/memory",
+      "area": "Claude Code CLAUDE.md and output styles — keeping CLAUDE.md small, output styles, and what bloats every-turn context"
+    },
+    {
+      "name": "Choose a token-efficient output style (avoid Explanatory or Learning for production use)",
+      "mechanism": "Output styles modify the system prompt and control verbosity of every response. The built-in Explanatory and Learning styles produce longer responses by design (adding 'Insights' sections and TODO markers). Default style is the most token-efficient for coding tasks. Custom styles with keep-coding-instructions: false drop Claude Code's built-in software engineering system prompt entirely when not coding.",
+      "config_location": ".claude/settings.local.json — set key `outputStyle` to `\"Default\"`, `\"Proactive\"`, `\"Explanatory\"`, `\"Learning\"`, or a custom style name. Alternatively run `/config` and select Output style.",
+      "saves": "Switching from Explanatory or Learning to Default eliminates extra output tokens per response; using a custom style without keep-coding-instructions saves system-prompt input tokens on non-coding tasks",
+      "actionable": true,
+      "evidence": "\"The built-in Explanatory and Learning styles produce longer responses than Default by design, which increases output tokens.\" and \"Token usage depends on the style. Adding instructions to the system prompt increases input tokens, though prompt caching reduces this cost after the first request in a session.\" — https://code.claude.com/docs/en/output-styles",
+      "area": "Claude Code CLAUDE.md and output styles — keeping CLAUDE.md small, output styles, and what bloats every-turn context"
+    },
+    {
+      "name": "Set outputStyle at session start, not mid-session",
+      "mechanism": "Output style is part of the system prompt layer, read once at session start. Changing it mid-session via /config does not apply until /clear or restart — and does not invalidate the cache. Changing it between sessions (before the first turn) avoids a cache miss. Changing it mid-session wastes the setting change until reset.",
+      "config_location": ".claude/settings.local.json — set `outputStyle` before starting a session; or run /config before the first turn",
+      "saves": "Prevents unnecessary cache invalidation; ensures the output style change actually takes effect",
+      "actionable": true,
+      "evidence": "\"Output style is part of the system prompt, which Claude Code reads once at session start. Changes take effect after /clear or a new session.\" — https://code.claude.com/docs/en/output-styles",
+      "area": "Claude Code CLAUDE.md and output styles — keeping CLAUDE.md small, output styles, and what bloats every-turn context"
+    },
+    {
+      "name": "Use /btw for side questions that should not enter conversation history",
+      "mechanism": "The /btw command shows an answer in a dismissible overlay without inserting the question or answer into the conversation history. This prevents side questions from growing context and consuming tokens on subsequent turns.",
+      "config_location": "Interactive session command: /btw <question>",
+      "saves": "Keeps context window clean of side questions; eliminates tokens for questions that are informational only",
+      "actionable": true,
+      "evidence": "\"For quick questions that don't need to stay in context, use /btw. The answer appears in a dismissible overlay and never enters conversation history, so you can check a detail without growing context.\" — https://code.claude.com/docs/en/costs",
+      "area": "Claude Code CLAUDE.md and output styles — keeping CLAUDE.md small, output styles, and what bloats every-turn context"
+    },
+    {
+      "name": "Use /clear between unrelated tasks",
+      "mechanism": "Stale conversation history from a previous task consumes tokens on every subsequent message in the same session. /clear resets the context window entirely, so the next task starts with only the base system prompt and CLAUDE.md. This also resets the prompt cache (project context reloads from disk).",
+      "config_location": "Interactive session command: /clear",
+      "saves": "Eliminates stale conversation tokens from prior tasks on every turn of the new task",
+      "actionable": true,
+      "evidence": "\"Use /clear to start fresh when switching to unrelated work. Stale context wastes tokens on every subsequent message.\" — https://code.claude.com/docs/en/costs",
+      "area": "Claude Code CLAUDE.md and output styles — keeping CLAUDE.md small, output styles, and what bloats every-turn context"
+    },
+    {
+      "name": "Customize /compact instructions to preserve only essential context",
+      "mechanism": "Auto-compaction summarizes conversation history when approaching context limits. Without instructions, the summary may include irrelevant history. Custom compaction instructions (in CLAUDE.md or inline) tell Claude what to prioritize in the summary, producing a smaller, more focused summary and a smaller post-compact context.",
+      "config_location": "CLAUDE.md — add a section `# Compact instructions` with what to preserve. Or inline: `/compact Focus on code samples and API usage`",
+      "saves": "Produces smaller post-compaction context; avoids preserving irrelevant tokens across the compaction boundary",
+      "actionable": true,
+      "evidence": "\"Add custom compaction instructions: /compact Focus on code samples and API usage tells Claude what to preserve during summarization.\" and \"Customize compaction behavior in CLAUDE.md with instructions like 'When compacting, always preserve the full list of modified files and any test commands'\" — https://code.claude.com/docs/en/costs",
+      "area": "Claude Code CLAUDE.md and output styles — keeping CLAUDE.md small, output styles, and what bloats every-turn context"
+    },
+    {
+      "name": "Use subagents to isolate high-volume file reads and verbose operations",
+      "mechanism": "Running tests, fetching documentation, grepping large logs, or exploring a codebase reads many files and generates large tool outputs — all of which accumulate in the main context window. Delegating these to subagents keeps the verbose output in the subagent's separate context; only a summary returns to the main conversation.",
+      "config_location": "Inline prompt instruction: 'Use subagents to investigate X' — or define a subagent in .claude/agents/<name>.md with specific tools and model",
+      "saves": "Prevents large file-read and tool-output tokens from entering and remaining in the main context window",
+      "actionable": true,
+      "evidence": "\"Delegate these to subagents so the verbose output stays in the subagent's context while only a summary returns to your main conversation.\" — https://code.claude.com/docs/en/costs",
+      "area": "Claude Code CLAUDE.md and output styles — keeping CLAUDE.md small, output styles, and what bloats every-turn context"
+    },
+    {
+      "name": "Prefer CLI tools over MCP servers for external service interactions",
+      "mechanism": "MCP tool definitions are loaded into the system prompt layer (even when deferred, the deferred tools' names take space). CLI tools like gh, aws, gcloud, sentry-cli are invoked via Bash and add zero per-tool listing tokens to context.",
+      "config_location": "CLAUDE.md — add instructions directing Claude to use specific CLI tools. Ensure CLI tools are installed in the environment.",
+      "saves": "Avoids MCP tool-definition tokens in system prompt; also avoids cache invalidation when MCP servers connect/disconnect",
+      "actionable": true,
+      "evidence": "\"Prefer CLI tools when available: Tools like gh, aws, gcloud, and sentry-cli are still more context-efficient than MCP servers because they don't add any per-tool listing.\" — https://code.claude.com/docs/en/costs",
+      "area": "Claude Code CLAUDE.md and output styles — keeping CLAUDE.md small, output styles, and what bloats every-turn context"
+    },
+    {
+      "name": "Disable unused MCP servers",
+      "mechanism": "Each connected MCP server contributes tool definitions to the system prompt layer (or deferred tool name listings). Servers that are connected but not used still consume context tokens and can trigger cache invalidation when they connect/disconnect or push dynamic tool updates.",
+      "config_location": "Run /mcp in session to see configured servers; disable via /mcp command or remove from .claude/settings.json `mcpServers` key",
+      "saves": "Removes unused MCP tool definition tokens from context; prevents inadvertent cache invalidation from idle servers",
+      "actionable": true,
+      "evidence": "\"Disable unused servers: Run /mcp to see configured servers and disable any you're not actively using.\" — https://code.claude.com/docs/en/costs",
+      "area": "Claude Code CLAUDE.md and output styles — keeping CLAUDE.md small, output styles, and what bloats every-turn context"
+    },
+    {
+      "name": "Use hooks to preprocess large tool outputs before Claude sees them",
+      "mechanism": "A PreToolUse hook can intercept Bash or other commands and rewrite them to filter output before it enters context. For example, a hook can grep a 10,000-line log file for ERROR lines and return only those, reducing context from tens of thousands of tokens to hundreds.",
+      "config_location": ".claude/settings.json — add to `hooks.PreToolUse` array: `{\"matcher\": \"Bash\", \"hooks\": [{\"type\": \"command\", \"command\": \"path/to/filter-script.sh\"}]}`",
+      "saves": "Can reduce large command-output tokens (e.g., test logs, build output) by orders of magnitude before they enter the context",
+      "actionable": true,
+      "evidence": "\"Instead of Claude reading a 10,000-line log file to find errors, a hook can grep for ERROR and return only matching lines, reducing context from tens of thousands of tokens to hundreds.\" — https://code.claude.com/docs/en/costs",
+      "area": "Claude Code CLAUDE.md and output styles — keeping CLAUDE.md small, output styles, and what bloats every-turn context"
+    },
+    {
+      "name": "Pick model and effort level at session start — avoid mid-session changes",
+      "mechanism": "Both model and effort level are part of the cache key. Switching either mid-session invalidates the entire prompt cache, causing the next turn to reprocess the full conversation history at full uncached input token cost. Setting them once at the start of a session maximizes cache hits throughout.",
+      "config_location": "/model command or `model` key in .claude/settings.json; /effort command or `effortLevel` key in .claude/settings.json",
+      "saves": "Prevents full cache invalidation mid-session; avoids paying full uncached input token rates on a long conversation",
+      "actionable": true,
+      "evidence": "\"Pick your model and effort level at the top of a session, then save /compact for natural breaks between tasks. The fewer changes you make mid-task, the higher your cache hit rate.\" — https://code.claude.com/docs/en/prompt-caching",
+      "area": "Claude Code CLAUDE.md and output styles — keeping CLAUDE.md small, output styles, and what bloats every-turn context"
+    },
+    {
+      "name": "Enable 1-hour prompt cache TTL on API key / Bedrock / Vertex",
+      "mechanism": "By default, prompt cache entries on API key and third-party providers expire after 5 minutes of inactivity. Setting ENABLE_PROMPT_CACHING_1H=1 extends this to 1 hour. This keeps the cache warm through longer breaks and avoids paying full uncached input rates after stepping away from a session.",
+      "config_location": "Environment variable: ENABLE_PROMPT_CACHING_1H=1 — set in shell or in managed-settings.json `env` block",
+      "saves": "Avoids full-context reprocessing costs when resuming a session after a break longer than 5 minutes but under 1 hour",
+      "actionable": true,
+      "evidence": "\"On an API key, Bedrock, Vertex, Foundry, or Claude Platform on AWS, you pay the per-token rates, so the TTL stays at the cheaper five minutes by default. To opt into the one-hour TTL, set ENABLE_PROMPT_CACHING_1H=1.\" — https://code.claude.com/docs/en/prompt-caching",
+      "area": "Claude Code CLAUDE.md and output styles — keeping CLAUDE.md small, output styles, and what bloats every-turn context"
+    },
+    {
+      "name": "Reduce extended thinking budget for simple tasks",
+      "mechanism": "Extended thinking is enabled by default and thinking tokens are billed as output tokens. The default budget can be tens of thousands of tokens per request. Lowering the effort level (/effort) or setting MAX_THINKING_TOKENS reduces thinking token spend on tasks that do not require deep reasoning.",
+      "config_location": "Session command /effort to set effort level; env var MAX_THINKING_TOKENS=8000 for models with a fixed thinking budget; or disable thinking entirely in /config. Key `effortLevel` in .claude/settings.json.",
+      "saves": "Reduces output tokens (billed as output) on turns that don't need extended reasoning",
+      "actionable": true,
+      "evidence": "\"Thinking tokens are billed as output tokens, and the default budget can be tens of thousands of tokens per request depending on the model. For simpler tasks where deep reasoning isn't needed, you can reduce costs by lowering the effort level with /effort or in /model, disabling thinking in /config, or, on models with a fixed thinking budget, lowering the budget with MAX_THINKING_TOKENS=8000.\" — https://code.claude.com/docs/en/costs",
+      "area": "Claude Code CLAUDE.md and output styles — keeping CLAUDE.md small, output styles, and what bloats every-turn context"
+    },
+    {
+      "name": "Use Sonnet (not Opus) as the default model; switch to Opus only for complex tasks",
+      "mechanism": "Opus costs significantly more per token than Sonnet. Sonnet handles most coding tasks well. Using Sonnet as the session default and switching to Opus only for complex architectural decisions keeps the per-session cost lower.",
+      "config_location": "`model` key in .claude/settings.json — set to `claude-sonnet-4-5` or equivalent current Sonnet ID; or use /model command. For subagents, set `model: haiku` in .claude/agents/<name>.md for simple tasks.",
+      "saves": "Reduces per-token cost for routine coding turns",
+      "actionable": true,
+      "evidence": "\"Sonnet handles most coding tasks well and costs less than Opus. Reserve Opus for complex architectural decisions or multi-step reasoning. For simple subagent tasks, specify model: haiku in your subagent configuration.\" — https://code.claude.com/docs/en/costs",
+      "area": "Claude Code CLAUDE.md and output styles — keeping CLAUDE.md small, output styles, and what bloats every-turn context"
+    },
+    {
+      "name": "Use /rewind instead of /compact when abandoning a wrong path",
+      "mechanism": "/compact produces a summary then rebuilds a new conversation cache. /rewind truncates back to an earlier turn whose prefix is already cached — so the next request hits the existing cache entry rather than re-computing. This is cheaper when you want to abandon a direction entirely rather than compress and continue.",
+      "config_location": "Session command: /rewind (or double-tap Escape) — select a checkpoint from the menu",
+      "saves": "Avoids cache rebuild cost of /compact; reuses the already-cached prefix at the rewind point",
+      "actionable": true,
+      "evidence": "\"If you've gone down a path you want to abandon entirely, /rewind to an earlier turn instead. Rewinding truncates back to a prefix that is already cached, rather than building a new one as compaction does.\" — https://code.claude.com/docs/en/prompt-caching",
+      "area": "Claude Code CLAUDE.md and output styles — keeping CLAUDE.md small, output styles, and what bloats every-turn context"
+    },
+    {
+      "name": "Do not change output style mid-session (change takes effect after /clear or restart)",
+      "mechanism": "Changing outputStyle mid-session via /config does not update the system prompt currently in memory and does not invalidate the cache. The change is silently deferred. If you need a different style, change it at the start of a new session or after /clear, not in the middle of a task.",
+      "config_location": ".claude/settings.local.json key `outputStyle` — set before starting a session; runtime: /config > Output style then /clear",
+      "saves": "Prevents confusion from settings that appear to take effect but don't; prevents wasted turns due to unexpected style mismatch mid-session",
+      "actionable": true,
+      "evidence": "\"Output style is part of the system prompt, which Claude Code reads once at session start. Changing it via /config or the outputStyle setting mid-session does not invalidate the cache, but the change also doesn't apply.\" — https://code.claude.com/docs/en/prompt-caching",
+      "area": "Claude Code CLAUDE.md and output styles — keeping CLAUDE.md small, output styles, and what bloats every-turn context"
+    },
+    {
+      "name": "Avoid resuming long sessions after a Claude Code upgrade",
+      "mechanism": "A Claude Code upgrade typically changes the system prompt or tool definitions. Resuming a session after an upgrade reprocesses the entire conversation history at full uncached cost because the history now sits behind a different system prompt. The cost scales with session length.",
+      "config_location": "Set DISABLE_AUTOUPDATER=1 in environment or managed-settings.json `env` block to control when upgrades apply. After upgrading, start a fresh session rather than resuming a long one.",
+      "saves": "Avoids paying full uncached input token rates on long session histories after an upgrade",
+      "actionable": true,
+      "evidence": "\"Resuming a session after an upgrade reprocesses the entire conversation history with no cache hits, since the history now sits behind a different system prompt. The cost scales with how long the resumed conversation is.\" — https://code.claude.com/docs/en/prompt-caching",
+      "area": "Claude Code CLAUDE.md and output styles — keeping CLAUDE.md small, output styles, and what bloats every-turn context"
+    },
+    {
+      "name": "Enable MCP tool search (deferred tool loading) — ensure it is not disabled",
+      "mechanism": "By default, MCP tool definitions are deferred: only tool names enter the system prompt layer until Claude actually uses a tool. When tool search is unavailable or disabled (e.g., on Haiku models, Vertex AI, or with a custom ANTHROPIC_BASE_URL), all tool definitions load into the system prompt prefix and any change invalidates the full cache. Keeping tool search enabled (the default) keeps definitions out of the cached prefix.",
+      "config_location": "Default behavior — no action needed. Do NOT set alwaysLoad on MCP servers unless necessary. Do NOT use Haiku as main model if MCP tool count is high. Check /context to see current MCP overhead.",
+      "saves": "Prevents MCP tool definitions from bloating the system prompt layer; prevents cache invalidation on MCP server changes",
+      "actionable": true,
+      "evidence": "\"MCP tool definitions are deferred by default, so only tool names enter context until Claude uses a specific tool.\" and \"Deferred tools, the default on supported models: a server connecting, disconnecting, or changing its tool list only appends new content and doesn't disturb anything already cached.\" — https://code.claude.com/docs/en/costs and https://code.claude.com/docs/en/prompt-caching",
+      "area": "Claude Code CLAUDE.md and output styles — keeping CLAUDE.md small, output styles, and what bloats every-turn context"
+    },
+    {
+      "name": "Use auto memory instead of CLAUDE.md for things Claude discovers itself",
+      "mechanism": "Auto memory (MEMORY.md in ~/.claude/projects/<project>/memory/) stores Claude-discovered learnings. Only the first 200 lines or 25KB of MEMORY.md load at session start; detailed topic files load on-demand. This keeps auto-accumulated context separate from your hand-authored CLAUDE.md and automatically caps the base context contribution.",
+      "config_location": "Auto memory is on by default. Toggle: `autoMemoryEnabled` key in .claude/settings.json or CLAUDE_CODE_DISABLE_AUTO_MEMORY=1 env var. Custom location: `autoMemoryDirectory` key in settings.json.",
+      "saves": "Prevents Claude-discovered learnings from bloating CLAUDE.md; topic files with detailed notes don't load at session start — only on demand",
+      "actionable": true,
+      "evidence": "\"The first 200 lines of MEMORY.md, or the first 25KB, whichever comes first, are loaded at the start of every conversation. Content beyond that threshold is not loaded at session start. Claude keeps MEMORY.md concise by moving detailed notes into separate topic files.\" — https://code.claude.com/docs/en/memory",
+      "area": "Claude Code CLAUDE.md and output styles — keeping CLAUDE.md small, output styles, and what bloats every-turn context"
+    }
+  ],
+  "sources": [
+    "https://code.claude.com/docs/en/best-practices",
+    "https://code.claude.com/docs/en/costs",
+    "https://code.claude.com/docs/en/env-vars",
+    "https://code.claude.com/docs/en/hooks",
+    "https://code.claude.com/docs/en/hooks-guide",
+    "https://code.claude.com/docs/en/mcp",
+    "https://code.claude.com/docs/en/memory",
+    "https://code.claude.com/docs/en/model-config",
+    "https://code.claude.com/docs/en/output-styles",
+    "https://code.claude.com/docs/en/prompt-caching",
+    "https://code.claude.com/docs/en/settings",
+    "https://code.claude.com/docs/en/settings.md",
+    "https://code.claude.com/docs/en/sub-agents",
+    "https://platform.claude.com/docs/en/about-claude/models/overview",
+    "https://platform.claude.com/docs/en/about-claude/pricing",
+    "https://platform.claude.com/docs/en/docs/build-with-claude/prompt-caching",
+    "https://www.anthropic.com/engineering/advanced-tool-use"
+  ]
+}

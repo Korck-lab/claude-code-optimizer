@@ -1,0 +1,8 @@
+optimizer/out/
+sessions/
+__pycache__/
+*.pyc
+# personal / machine-applied state (this tool edits these; don't ship them)
+.claude/settings.json
+.claude/settings.local.json
+*.bak.*
