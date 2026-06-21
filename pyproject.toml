@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=65.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "claude-code-optimizer"
+version = "1.0.0"
+description = "Analyze Claude Code session logs and surface per-project, applyable configuration optimizations to cut quota/token waste."
+readme = "README.md"
+requires-python = ">=3.9"
+license = {text = "MIT"}
+authors = [
+    {name = "cc-optimizer contributors", email = "rafael.aguilher@gmail.com"}
+]
+keywords = ["claude", "claude-code", "quota", "optimization", "token", "analyzer"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Tools",
+    "Topic :: Utilities",
+]
+
+[project.urls]
+Homepage = "https://github.com/rafaelaguilherdacosta/claude-code-optimizer"
+Repository = "https://github.com/rafaelaguilherdacosta/claude-code-optimizer.git"
+Issues = "https://github.com/rafaelaguilherdacosta/claude-code-optimizer/issues"
+Documentation = "https://github.com/rafaelaguilherdacosta/claude-code-optimizer#readme"
+
+[project.scripts]
+cc-optimizer = "optimizer.main:main"
+
+[tool.setuptools]
+packages = ["optimizer"]
+
+[tool.setuptools.package-data]
+optimizer = ["knowledge-base.json"]

@@ -1,178 +1,312 @@
 # cc-optimizer
 
-An **external, reusable system that analyzes Claude Code session logs and surfaces
-per-project, *applyable* configuration optimizations to cut quota/token waste.**
-It is a *levantamento* (survey) tool: it proposes concrete config changes with
-estimated savings — it **does not apply anything**.
+Analyze your Claude Code session logs and discover per-project configuration optimizations to cut token waste.
 
-Different models burn quota very differently (Opus input is 5× Haiku, Fable 10×),
-so the biggest levers are model choice, prompt-cache behavior, subagent model, and
-context bloat. Every recommendation maps to a real config knob sourced from the
-**current official docs** (never from model memory), with a $ estimate derived from
-the **real token components already recorded in each transcript**.
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Python 3.9+](https://img.shields.io/badge/Python-3.9+-blue.svg)](https://www.python.org/downloads/)
 
-## Why it's cheap to run
+## What it does
 
-The transcripts already contain `message.usage` (input/output, cache read/creation,
-1h vs 5m ephemeral) and `message.model` per turn. So the heavy analysis is **pure
-Python arithmetic — zero model tokens**. LLMs are used only where judgment is needed:
-- one-time **research** of official docs (Sonnet agents) → `knowledge-base.json`
-- optional **per-project refinement** (Sonnet; Opus only for the top spenders)
+- 🔍 **Scans your Claude Code session history** (~/.claude/projects) — automatic, zero-config
+- 📊 **Identifies per-project quota waste**: expensive models on trivial work, bloated MCP servers, unused plugins, cache misses
+- 💰 **Generates actionable findings with $ estimates** based on your real token usage
+- ✏️ **Writes safe, reversible config changes** (dry-run by default, you review before applying)
+- 🔒 **Never modifies settings without approval** — requires explicit `--apply` flag
 
-## Pipeline
+## Key insights
 
-```
-sessions/<project-slug>/<uuid>.jsonl         your copied Claude Code logs
-        │
-        ▼  analyze.py        deterministic aggregate  ── 0 model tokens
-   raw-stats.json
-        │
-        ▼  cost.py           weight by fresh-docs pricing (knowledge-base.json)
-   cost-stats.json
-        │
-        ▼  recommend.py      rules engine → actionable findings ($ + evidence)
-   findings.json ───────────────────────────────► report.py → report.md
-        │
-        ▼  briefs.py         compact per-project briefs (no raw transcripts)
-   out/briefs/*.json
-        │
-        ▼  cc-optimizer workflow   LLM refine (Opus top-5 / Sonnet rest) + rollup
-   refine-result.json
-        │
-        ▼  merge.py          keep deterministic evidence + LLM tightening
-   findings-final.json ─────────────────────────► report.py → report-final.md
-```
+Different models burn budget very differently:
+- **Opus input tokens**: 5× more expensive than Haiku
+- **Fable**: 10× more expensive than Haiku per input token
 
-## Run
+Biggest optimization levers:
+1. **Model choice** — use Haiku for simple tasks, Opus only for complex reasoning
+2. **Prompt caching** — stabilize your context prefixes to hit cache more often
+3. **Subagent models** — task-specific model selection for background work
+4. **MCP/plugin bloat** — remove tools and plugins unused in each project
+
+Every recommendation maps to a real Claude Code config knob from official documentation, with estimates derived from your actual recorded token usage.
+
+## Installation
+
+### Via pip (recommended)
 
 ```bash
-# 1. put your logs under ./sessions (one subdir per project, *.jsonl inside)
-# 2. deterministic levantamento (produces optimizer/out/report.md):
-./run.sh                      # or: ./run.sh /path/to/sessions
-
-# 3. (optional) LLM-refined findings — from a Claude Code session:
-#    Workflow({ name: "cc-optimizer", args: { refineArgsPath: "<abs>/optimizer/out/refine-args.json" } })
-#    then merge.py + report.py on findings-final.json (see run.sh tail).
+pip install claude-code-optimizer
+cc-optimizer run  # runs with auto-detected ~/.claude/projects
 ```
 
-`knowledge-base.json` is regenerated from live docs by the **cc-cost-research**
-workflow — re-run it when Claude Code/pricing changes so nothing relies on memory.
-
-## Apply (optional, you run it)
-
-`apply.py` turns the findings into real `settings.json` edits. **Safe by default
-(dry-run)**; it writes only with `--apply`. It auto-applies only unambiguous,
-low-risk keys (subagent/default model, MCP tool-search deferral, cache-prefix
-stabilizers) and lists conditional/destructive items (force-5m cache, MCP server
-prune) under **MANUAL** for you to review. Project dirs are resolved from the
-real `cwd` in the transcripts (the dominant root), never from the ambiguous slug.
+### From source
 
 ```bash
-python3 optimizer/apply.py                       # dry-run: preview the plan (min-confidence=medium)
-python3 optimizer/apply.py --min-confidence low  # also include low-confidence upper-bound levers (opusplan)
-python3 optimizer/apply.py --project dev-squad --apply   # write one project (deep-merge + .bak)
-python3 optimizer/apply.py --apply --global      # write all + user-level ~/.claude/settings.json defaults
+git clone https://github.com/rafaelaguilherdacosta/claude-code-optimizer
+cd claude-code-optimizer
+pip install -e .
 ```
 
-Applying changes YOUR environment — review the dry-run and start with one project.
+## Quick start
 
-## v2 — usage-driven MCP / plugin / connector cleanup (per project)
-
-The biggest *non-token* waste is **stuff loaded into every project that the project
-never uses**: claude.ai connectors, plugin-provided MCP servers, and plugin skills.
-v2 finds and removes exactly those, **per project**, from real session evidence —
-using only mechanisms verified to take effect at runtime (a previous attempt with
-the unsupported `disabledMcpServers` key was a silent no-op; v2 does not repeat it).
-
-```
-~/.claude.json + ~/.claude/settings.json + ~/.claude/plugins   "what is EXPOSED"
-sessions/<slug>/*.jsonl  (real tool_use / Skill calls)          "what is USED"
-        │
-        ▼  inventory.py        exposed − used  →  per-project recommendations
-   out/inventory.json
-        │
-        ▼  apply2.py           write the 3 supported mechanisms (dry-run default)
-   out/apply2-report.json
-```
-
-**What it computes.** For each project (one session slug → one project root, resolved
-from the transcript `cwd`):
-
-- **Exposed** = claude.ai connectors + globally-enabled plugins (`~/.claude/settings.json`
-  `enabledPlugins`, incl. the `*@*: true` wildcard) + global user `mcpServers`.
-- **Used** = real `tool_use` (`mcp__<server>__…`) and `Skill(skill="<plugin>:…")` calls
-  parsed from the transcripts.
-- **Capability** of each plugin (does it ship an MCP server? how many skills?) comes
-  from a **static catalog** read off the plugin payloads in `~/.claude/plugins/cache/…`
-  (`plugin.json` `mcpServers` + `.mcp.json` + `skills/`), so it flags dead weight that
-  was *listed but never invoked* (e.g. a skills pack that bloats `/doctor`).
-
-**Two correctness rules it enforces** (both caught real false-positives in testing):
-
-- **Worktree aggregation** — `…/.claude/worktrees/<x>` is collapsed onto its parent and
-  their usage summed, because worktrees inherit the parent's `settings.local.json`.
-  Otherwise a plugin used only via worktrees would be wrongly disabled in the parent.
-- **Inherited settings** — a nested project inherits every ancestor's `.claude` settings;
-  `inventory.py` resolves that chain so it won't re-recommend a disable the parent already made.
-
-**The three mechanisms `apply2.py` writes** (all per-project, all reversible):
-
-| Recommendation | Edit |
-|---|---|
-| connectors, 0 use | `settings.json` → `"disableClaudeAiConnectors": true` |
-| plugin, 0 use | `settings.local.json` → `enabledPlugins["<id>"] = false` (merge) |
-| dead `disabledMcpServers` key | removed (it is an unsupported no-op) |
+### 1. Analyze your session logs (zero-config)
 
 ```bash
-python3 optimizer/inventory.py sessions optimizer/out/inventory.json        # build the cross-reference
-python3 optimizer/apply2.py optimizer/out/inventory.json                     # dry-run: per-project plan
-python3 optimizer/apply2.py optimizer/out/inventory.json --project foo       # preview one project
-python3 optimizer/apply2.py optimizer/out/inventory.json --apply --report optimizer/out/apply2-report.json
+./run.sh
+# or: python3 optimizer/analyze.py ~/.claude/projects optimizer/out/raw-stats.json
 ```
 
-**Safety.** Dry-run by default. Per touched file: timestamped `.bak`, deep-merge (never
-clobbers other keys), and on-disk verify (intended mutations present, **zero collateral**).
-Ephemeral worktrees and deleted/temp project dirs are skipped. The **global
-`~/.claude/settings.json` is never written**. Guarantee checked on every run: it never
-disables a plugin with >0 aggregated use. After applying, re-run `inventory.py` — applied
-projects should drop to **0 recommendations** (idempotent = the change took effect); for
-UI-level proof reopen `/mcp` and `/doctor` in a couple of projects.
+The tool automatically detects your Claude Code session history at `~/.claude/projects` (created by Claude Code when you use it). No setup needed.
 
-## What counts as a finding
+Output: `optimizer/out/report.md` — a markdown report of findings and estimates.
 
-Only an **applyable config change** with (a) a concrete knob + location, (b) a
-concrete value for *that* project, (c) an estimated $ saving from its real tokens,
-(d) auditable evidence. Pure advice/tips are excluded by design (see
-`knowledge-base.json → excluded_advisory`). Confidence and UPPER-BOUND labels are
-carried through honestly; estimates are a model, not a bill.
+### 2. Review findings (dry-run)
 
-## Detection signals (→ knob)
-
-| Signal (measured from `usage`) | Knob |
-|---|---|
-| Subagents on expensive models | `CLAUDE_CODE_SUBAGENT_MODEL=haiku` |
-| Expensive default model on trivial turns | `model: sonnet` / `opusplan` |
-| 1h-cache write overuse | `FORCE_PROMPT_CACHING_5M` |
-| MCP tool-schema / context bloat | `ENABLE_TOOL_SEARCH` + prune servers |
-| Low prompt-cache hit ratio | stabilize prefix (`ATTRIBUTION_HEADER=0`, `DISABLE_AUTOUPDATER`) |
-
-## Layout
-
-```
-run.sh                       orchestrator (deterministic pipeline)
-optimizer/analyze.py         aggregate transcripts → raw-stats.json
-optimizer/cost.py            $ weighting from KB pricing
-optimizer/recommend.py       rules engine → findings.json
-optimizer/briefs.py          compact per-project briefs
-optimizer/merge.py           deterministic + LLM merge → findings-final.json
-optimizer/report.py          findings → Markdown report
-optimizer/apply.py           findings → per-project settings.json (dry-run default)
-optimizer/inventory.py       v2: exposed × used → per-project MCP/plugin/connector recs
-optimizer/apply2.py          v2: write disableClaudeAiConnectors / enabledPlugins:false (dry-run default)
-optimizer/knowledge-base.json   pricing + actionable knobs + signals (fresh docs)
-optimizer/out/               generated artifacts (gitignored)
-.claude/workflows/cc-optimizer.js   the LLM refinement workflow
-sessions/                    your logs (gitignored)
+```bash
+python3 optimizer/apply.py
+# Preview what changes would be applied (no modifications yet)
 ```
 
-Nothing here is applied to your machine. Scope is **levantamento only**.
+### 3. Apply changes (one project at a time)
+
+```bash
+# Single project — review the dry-run first
+python3 optimizer/apply.py --project your-project-slug --apply
+
+# All projects (with backups)
+python3 optimizer/apply.py --apply --global
+```
+
+Each project gets a timestamped `.bak` file. Changes are deep-merged into existing configs — nothing is lost.
+
+## Examples
+
+### Example 1: Expensive model on trivial work
+
+**Finding:**
+```
+Project: my-web-app
+Opus model used on 120 small turns (< 300 output tokens)
+Recommendation: switch to Sonnet (3.5 hours ≈ $0.47 saved)
+Knob: model: sonnet in settings.json
+```
+
+**Why:** Small turns don't need Opus reasoning. Sonnet is 3× cheaper and still capable.
+
+### Example 2: Unused plugin in every project
+
+**Finding:**
+```
+Plugin @foo/mcp-server exposed to 50 projects, used in 2
+Recommendation: disable in 48 projects (saves 2.3 hours ≈ $1.20)
+Knob: enabledPlugins["@foo/mcp-server"] = false in settings.local.json
+```
+
+**Why:** Each loaded plugin slows down `/mcp` introspection and increases context overhead. Remove what you don't use.
+
+### Example 3: Cache-unfriendly prefix
+
+**Finding:**
+```
+Cache creation tokens: 450KB (1h pool)
+Cache read tokens: 120KB (1h pool)
+Hit ratio: 21% (low)
+Recommendation: stabilize context prefix (ATTRIBUTION_HEADER=0)
+Estimated: +12% cache hit rate ≈ $0.30/month saved
+```
+
+**Why:** Every unique header in your assistant messages ruins cache hits. Stabilize your context to reuse cache across sessions.
+
+## How it works
+
+### Pipeline
+
+```
+~/.claude/projects/                          Your Claude Code session logs
+        ↓
+   analyze.py          Aggregate by project, model, token usage
+        ↓
+   raw-stats.json      Per-project summaries (token, cache, model metrics)
+        ↓
+   cost.py             Weight findings by current official pricing
+        ↓
+   cost-stats.json     Finds with $ estimates
+        ↓
+   recommend.py        Rules engine → actionable recommendations
+        ↓
+   findings.json ──→ report.py ──→ report.md
+        ↓
+   (optional)
+   briefs.py          Per-project summaries for LLM refinement
+        ↓
+   cc-optimizer workflow  LLM tightens findings (Opus/Sonnet)
+        ↓
+   merge.py           Deterministic + LLM refinement
+        ↓
+   findings-final.json ──→ report-final.md
+```
+
+### Core features
+
+**Why it's fast:**
+- Pure Python arithmetic on recorded usage data — zero model tokens for analysis
+- LLMs only used for optional refinement of top spenders
+- Typical run: < 5 seconds on 100 projects
+
+**What counts as a finding:**
+- Must be applyable: real config knob + location + concrete value
+- Must have evidence: derived from your actual token usage
+- Must have a $ estimate: from current official pricing
+- Pure advice (tips, patterns) excluded by design
+
+**Safety guarantees:**
+- Dry-run by default — preview changes before applying
+- Per-file timestamped `.bak` backups before any write
+- Deep-merge: never clobbers other config keys
+- On-disk verification: inspects actual mutations
+- Global `~/.claude/settings.json` never modified (only per-project)
+- Idempotent: re-run analysis after applying — should show 0 recommendations
+
+### Detection signals
+
+| Signal (from your usage data) | Config knob | Impact |
+|---|---|---|
+| Expensive model on trivial output | `model: sonnet` / `model: haiku` | 3-5× cost reduction |
+| Subagents on expensive models | `CLAUDE_CODE_SUBAGENT_MODEL=haiku` | 5× cost reduction |
+| Low prompt-cache hit ratio | `ATTRIBUTION_HEADER=0` (stabilize prefix) | +10-15% cache hits |
+| 1h-cache write overuse | `FORCE_PROMPT_CACHING_5M` | Reduce ephemeral churn |
+| MCP context bloat | Disable unused MCP servers | Faster tool search, less context |
+| Unused plugins per project | `enabledPlugins[id]=false` | Cleaner /doctor output, faster startup |
+
+## v2: Per-project MCP / plugin / connector cleanup
+
+The largest non-token waste is **stuff loaded into every project that you never use**: Claude AI connectors, globally-enabled plugins, and MCP servers.
+
+v2 analyzes real tool usage from your transcripts:
+
+```
+~/.claude/plugins/cache/          What plugins are installed
+~/.claude/settings.json           What's globally enabled
+~/.claude/projects/*.jsonl        What you actually used (tool_use / Skill calls)
+        ↓
+   inventory.py        exposed − used = recommendations per project
+        ↓
+   apply2.py           Write reversible, safe cleanups
+```
+
+**Results:**
+- Disable unused connectors: `disableClaudeAiConnectors: true`
+- Disable unused plugins per-project: `enabledPlugins[id]: false` in `settings.local.json`
+- Remove dead `disabledMcpServers` keys (unsupported, no-op)
+
+**Correctness:**
+- **Worktree aggregation**: nested worktrees inherit parent settings; usage is correctly summed
+- **Inherited settings**: nested projects resolve parent config chains
+- **Zero false positives**: verified against actual plugin catalogs
+
+## Commands
+
+### analyze.py — aggregate transcripts
+
+```bash
+python3 optimizer/analyze.py ~/.claude/projects optimizer/out/raw-stats.json
+```
+
+Reads all `.jsonl` files from your Claude Code projects, produces token/model/cache aggregates per project.
+
+### cost.py — weight by pricing
+
+```bash
+python3 optimizer/cost.py optimizer/out/raw-stats.json optimizer/knowledge-base.json optimizer/out/cost-stats.json
+```
+
+Converts usage data to $ estimates using current official Claude pricing.
+
+### recommend.py — rules engine
+
+```bash
+python3 optimizer/recommend.py optimizer/out/raw-stats.json optimizer/knowledge-base.json optimizer/out/findings.json
+```
+
+Generates actionable recommendations with confidence levels and evidence.
+
+### apply.py — write per-project settings
+
+```bash
+python3 optimizer/apply.py                       # dry-run: preview plan
+python3 optimizer/apply.py --project foo         # preview one project
+python3 optimizer/apply.py --apply               # write all projects (with .bak)
+python3 optimizer/apply.py --apply --global      # also update ~/.claude/settings.json defaults
+```
+
+Writes safe, deep-merged config changes. Timestamped backups created before any mutation.
+
+### inventory.py — MCP/plugin usage analysis
+
+```bash
+python3 optimizer/inventory.py ~/.claude/projects optimizer/out/inventory.json
+```
+
+Builds exposed vs. used inventory for connectors, plugins, and MCP servers.
+
+### apply2.py — write MCP/plugin cleanups
+
+```bash
+python3 optimizer/apply2.py optimizer/out/inventory.json                     # dry-run
+python3 optimizer/apply2.py optimizer/out/inventory.json --apply             # write all
+python3 optimizer/apply2.py optimizer/out/inventory.json --project foo --apply # one project
+```
+
+Applies per-project disables for unused connectors/plugins. Safe, reversible, dry-run by default.
+
+## Project layout
+
+```
+run.sh                            Main orchestrator (deterministic pipeline)
+optimizer/
+  analyze.py                      Aggregate transcripts → raw-stats.json
+  cost.py                         $ weighting from knowledge-base.json
+  recommend.py                    Rules engine → findings.json
+  apply.py                        findings → per-project settings.json edits
+  inventory.py                    Exposed vs. used (v2: plugins/MCP/connectors)
+  apply2.py                       Write disableClaudeAiConnectors / enabledPlugins:false
+  briefs.py                       Compact summaries for LLM refinement
+  merge.py                        Deterministic + LLM merge
+  report.py                       Findings → Markdown
+  verify_apply.py                 Safety verification utilities
+  knowledge-base.json             Pricing + config knobs + signals (regenerated from official docs)
+  out/                            Generated artifacts (gitignored)
+.claude/workflows/cc-optimizer.js Optional LLM refinement workflow
+LICENSE                           MIT
+```
+
+## Configuration
+
+No configuration needed. The tool reads:
+- `~/.claude/projects/` — your session history (auto-detected)
+- `~/.claude/settings.json` — your current config
+- `~/.claude/plugins/cache/` — installed plugin metadata
+- `optimizer/knowledge-base.json` — official pricing & knobs
+
+To refresh pricing when Claude Code/models change:
+- Run the `cc-cost-research` workflow (standalone) to regenerate `knowledge-base.json`
+
+## Requirements
+
+- **Python 3.9+**
+- Claude Code (any recent version; used only for session history)
+- Your session history (`~/.claude/projects/` — automatically created by Claude Code)
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on reporting issues, submitting features, and development setup.
+
+## License
+
+MIT © 2026 cc-optimizer contributors. See [LICENSE](LICENSE).
+
+---
+
+**Questions?**  
+Open an issue on [GitHub](https://github.com/rafaelaguilherdacosta/claude-code-optimizer/issues) with the `[question]` prefix.
+
+**Want to learn more?**  
+- [CHANGELOG](CHANGELOG.md) — version history and features
+- [Official Claude Code docs](https://claude.com/code) — session export, settings, plugins

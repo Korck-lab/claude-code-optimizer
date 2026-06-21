@@ -3,7 +3,8 @@
 # cc-optimizer — run the full quota-waste levantamento over a Claude Code
 # session corpus. Deterministic, model-token cost = 0 for the analysis itself.
 #
-#   ./run.sh [SESSIONS_DIR]      (default: ./sessions)
+# ZERO-CONFIG: automatically detects Claude Code logs at ~/.claude/projects
+# Override with: ./run.sh [SESSIONS_DIR]
 #
 # Produces optimizer/out/report.md + findings.json. The optional LLM refinement
 # layer (the cc-optimizer workflow) is a separate, enhancement step — see README.
@@ -11,13 +12,26 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-SESSIONS="${1:-sessions}"
+SESSIONS="${1:-}"
 OUT="optimizer/out"
 KB="optimizer/knowledge-base.json"
 
+# Auto-detect ~/.claude/projects if no argument provided
+if [ -z "$SESSIONS" ]; then
+  CLAUDE_PROJECTS="$HOME/.claude/projects"
+  if [ -d "$CLAUDE_PROJECTS" ]; then
+    SESSIONS="$CLAUDE_PROJECTS"
+    echo "=> Detected Claude Code projects at $SESSIONS"
+  else
+    SESSIONS="sessions"
+  fi
+fi
+
 if [ ! -d "$SESSIONS" ]; then
-  echo "error: sessions dir '$SESSIONS' not found. Copy your Claude Code logs there"
-  echo "       (one subdir per project, *.jsonl inside), or pass a path: ./run.sh /path/to/sessions"
+  echo "error: sessions dir '$SESSIONS' not found. Either:"
+  echo "       1. Have Claude Code installed with session history (~/.claude/projects exists)"
+  echo "       2. Copy your Claude Code logs to ./sessions (one subdir per project, *.jsonl inside)"
+  echo "       3. Pass a path: ./run.sh /path/to/sessions"
   exit 1
 fi
 if [ ! -f "$KB" ]; then
