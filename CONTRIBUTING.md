@@ -11,8 +11,11 @@ Thank you for considering a contribution. This document outlines guidelines for 
 ## Development Setup
 
 ```bash
-git clone https://github.com/rafaelaguilherdacosta/claude-code-optimizer
+git clone https://github.com/Korck-lab/claude-code-optimizer
 cd claude-code-optimizer
+
+# Configure git hooks for automatic version bumping
+git config core.hooksPath .githooks
 
 # Install dev dependencies (optional)
 pip install -r requirements-dev.txt
@@ -23,6 +26,17 @@ python3 -m py_compile optimizer/*.py
 # Test with your own session logs
 ./run.sh ~/.claude/projects  # auto-detects logs
 ```
+
+### Automatic Version Bumping
+
+The pre-commit hook (`.githooks/pre-commit`) automatically bumps the patch version when you commit code changes. It updates:
+- `VERSION` (source of truth)
+- `.claude-plugin/plugin.json`
+- `.claude-plugin/marketplace.json`
+- `pyproject.toml`
+- `optimizer/__init__.py`
+
+The hook respects a skip guard: it won't bump on no-op amends or if only docs/comments changed. Run `git config core.hooksPath .githooks` after clone to enable it.
 
 ## Running Tests
 
