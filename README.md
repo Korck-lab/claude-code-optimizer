@@ -384,3 +384,4 @@ Open an issue on [GitHub](https://github.com/rafaelaguilherdacosta/claude-code-o
 **Want to learn more?**  
 - [CHANGELOG](CHANGELOG.md) — version history and features
 - [Official Claude Code docs](https://claude.com/code) — session export, settings, plugins
+# Test change for version bump test
