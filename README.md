@@ -29,52 +29,84 @@ Every recommendation maps to a real Claude Code config knob from official docume
 
 ## Installation
 
-### Via pip (recommended)
+### Option 1: Claude Code Plugin (recommended)
+
+The easiest way to use cc-optimizer is as a Claude Code plugin with built-in commands:
+
+1. In Claude Code, run `/plugin`
+2. Click **Marketplace** → **New**
+3. Enter: `@Korck-lab/claude-code-optimizer`
+4. Click **Install**
+
+Then use the plugin commands directly in Claude Code:
+
+```
+/cc-optimizer:run        # Analyze your session logs
+/cc-optimizer:apply      # Preview config changes (dry-run)
+/cc-optimizer:inventory  # Analyze MCP/plugin usage (v2)
+```
+
+### Option 2: CLI Standalone
+
+Install via pip for command-line use:
 
 ```bash
 pip install claude-code-optimizer
 cc-optimizer run  # runs with auto-detected ~/.claude/projects
 ```
 
-### From source
+### Option 3: From Source
 
 ```bash
-git clone https://github.com/rafaelaguilherdacosta/claude-code-optimizer
+git clone https://github.com/Korck-lab/claude-code-optimizer
 cd claude-code-optimizer
 pip install -e .
+./run.sh  # or: python3 optimizer/analyze.py ~/.claude/projects optimizer/out/raw-stats.json
 ```
 
 ## Quick start
 
-### 1. Analyze your session logs (zero-config)
+### Using the Claude Code Plugin (easiest)
 
-```bash
-./run.sh
-# or: python3 optimizer/analyze.py ~/.claude/projects optimizer/out/raw-stats.json
+Once installed:
+
+```
+/cc-optimizer:run        # Scan logs, analyze, generate report
+                         # → optimizer/out/report.md
 ```
 
-The tool automatically detects your Claude Code session history at `~/.claude/projects` (created by Claude Code when you use it). No setup needed.
+Review the findings in the report. Then:
 
-Output: `optimizer/out/report.md` — a markdown report of findings and estimates.
-
-### 2. Review findings (dry-run)
-
-```bash
-python3 optimizer/apply.py
-# Preview what changes would be applied (no modifications yet)
+```
+/cc-optimizer:apply      # Preview config changes (dry-run)
+/cc-optimizer:apply --apply --project slug  # Write changes (with .bak backup)
 ```
 
-### 3. Apply changes (one project at a time)
+For MCP/plugin cleanup (v2):
 
-```bash
-# Single project — review the dry-run first
-python3 optimizer/apply.py --project your-project-slug --apply
-
-# All projects (with backups)
-python3 optimizer/apply.py --apply --global
+```
+/cc-optimizer:inventory  # Find unused plugins/connectors
 ```
 
-Each project gets a timestamped `.bak` file. Changes are deep-merged into existing configs — nothing is lost.
+### Using the CLI (standalone)
+
+If you prefer command-line:
+
+```bash
+./run.sh                 # Analyze logs (auto-detects ~/.claude/projects)
+# Output: optimizer/out/report.md
+
+python3 optimizer/apply.py         # Preview changes
+python3 optimizer/apply.py --apply # Apply all projects
+```
+
+### Step-by-step workflow
+
+1. **Analyze** — `/cc-optimizer:run` scans your session history
+2. **Review** — Read `optimizer/out/report.md` for findings and $ estimates
+3. **Dry-run** — `/cc-optimizer:apply` to preview what would change
+4. **Apply** — `/cc-optimizer:apply --apply` (with timestamped `.bak` backups)
+5. **Verify** — Re-run analysis to confirm applied changes took effect
 
 ## Examples
 
@@ -201,7 +233,49 @@ v2 analyzes real tool usage from your transcripts:
 - **Inherited settings**: nested projects resolve parent config chains
 - **Zero false positives**: verified against actual plugin catalogs
 
-## Commands
+## Plugin Commands (Claude Code)
+
+When installed as a plugin, use these commands directly in Claude Code:
+
+### /cc-optimizer:run
+
+Run the full optimization pipeline. Auto-detects `~/.claude/projects`.
+
+```
+/cc-optimizer:run                    # Analyze your session logs
+/cc-optimizer:run /path/to/sessions  # Custom path
+```
+
+Outputs: `optimizer/out/report.md` (main findings report)
+
+### /cc-optimizer:analyze
+
+Low-level analyzer — aggregate transcripts into per-project statistics (pure arithmetic, zero model tokens).
+
+```
+/cc-optimizer:analyze ~/.claude/projects optimizer/out/raw-stats.json
+```
+
+### /cc-optimizer:apply
+
+Preview or apply per-project config changes. Safe by default (dry-run).
+
+```
+/cc-optimizer:apply                          # Dry-run: preview all changes
+/cc-optimizer:apply --project dev-squad      # Dry-run: preview one project
+/cc-optimizer:apply --apply                  # Write all projects (with .bak)
+/cc-optimizer:apply --project dev-squad --apply  # Write one project
+```
+
+### /cc-optimizer:inventory
+
+Analyze MCP/plugin/connector usage (v2): find what's loaded but never used.
+
+```
+/cc-optimizer:inventory ~/.claude/projects optimizer/out/inventory.json
+```
+
+## CLI Commands (Standalone)
 
 ### analyze.py — aggregate transcripts
 

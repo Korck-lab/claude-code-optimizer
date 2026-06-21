@@ -1,0 +1,31 @@
+{
+  "name": "claude-code-optimizer",
+  "version": "1.0.0",
+  "description": "Analyze Claude Code session logs and discover per-project configuration optimizations to cut token waste. Zero-config auto-detection of ~/.claude/projects.",
+  "author": {
+    "name": "cc-optimizer contributors"
+  },
+  "license": "MIT",
+  "keywords": ["claude-code", "optimization", "quota", "token", "analyzer", "config"],
+  "repository": "https://github.com/Korck-lab/claude-code-optimizer",
+  "homepage": "https://github.com/Korck-lab/claude-code-optimizer",
+  "mcpServers": [],
+  "skills": [
+    {
+      "id": "cc-optimizer:run",
+      "name": "cc-optimizer:run"
+    },
+    {
+      "id": "cc-optimizer:analyze",
+      "name": "cc-optimizer:analyze"
+    },
+    {
+      "id": "cc-optimizer:apply",
+      "name": "cc-optimizer:apply"
+    },
+    {
+      "id": "cc-optimizer:inventory",
+      "name": "cc-optimizer:inventory"
+    }
+  ]
+}
