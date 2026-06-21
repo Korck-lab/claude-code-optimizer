@@ -1,28 +1,21 @@
 {
-  "plugin": {
-    "id": "claude-code-optimizer",
-    "name": "Claude Code Optimizer",
-    "version": "1.0.0",
-    "description": "Analyze Claude Code session logs and discover per-project configuration optimizations to cut token waste.",
-    "longDescription": "cc-optimizer scans your Claude Code session history (~/.claude/projects) with zero-config auto-detection. It identifies per-project quota waste: expensive models on cheap work, bloated MCP servers, unused plugins, cache misses. Generates actionable findings with $ estimates based on your actual token usage. Writes safe, reversible config changes (dry-run by default).",
-    "author": {
-      "name": "cc-optimizer contributors",
-      "url": "https://github.com/Korck-lab/claude-code-optimizer"
-    },
-    "license": "MIT",
-    "repository": "https://github.com/Korck-lab/claude-code-optimizer",
-    "homepage": "https://github.com/Korck-lab/claude-code-optimizer",
-    "documentation": "https://github.com/Korck-lab/claude-code-optimizer#readme",
-    "tags": ["optimization", "quota", "token", "analyzer", "config", "performance"],
-    "categories": ["analysis", "optimization", "utilities"],
-    "rating": 4.5,
-    "downloads": 0,
-    "verified": true,
-    "icon": "📊"
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "claude-code-optimizer-marketplace",
+  "description": "Marketplace for the Claude Code Optimizer plugin",
+  "owner": {
+    "name": "Korck Lab",
+    "email": "rafael.aguilher@gmail.com"
   },
-  "marketplace": {
-    "featured": true,
-    "promoted": false,
-    "category": "utilities"
-  }
+  "plugins": [
+    {
+      "name": "claude-code-optimizer",
+      "version": "1.0.0",
+      "description": "Analyze Claude Code session logs and discover per-project configuration optimizations to cut token waste. Zero-config auto-detection of ~/.claude/projects.",
+      "author": {
+        "name": "cc-optimizer contributors"
+      },
+      "source": ".",
+      "category": "development"
+    }
+  ]
 }
